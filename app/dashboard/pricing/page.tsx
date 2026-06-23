@@ -294,7 +294,6 @@ export default function PricingPage() {
     }
 
     const matched = matchItems(unpricedItems, refItems)
-    const totalCost = matched.reduce((s, i) => s + (i.effectiveTotal ?? 0), 0)
     const grouped = groupByChapter(matched)
     setChapters(grouped)
     setExpandedChapters(new Set(grouped.map(c => c.id)))
