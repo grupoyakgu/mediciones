@@ -13,6 +13,33 @@ interface InvoiceLineRaw {
   total_amount?: number | null
 }
 
+interface InvoiceData {
+  invoice_number?: string | null
+  invoice_date?: string | null
+  total_amount?: number | null
+  items: InvoiceLineRaw[]
+}
+
+function extractJsonObject(text: string): InvoiceData | null {
+  // 1. Direct parse
+  try {
+    const parsed = JSON.parse(text)
+    if (parsed && Array.isArray(parsed.items)) return parsed as InvoiceData
+  } catch { /* continue */ }
+
+  // 2. Slice from first { to last } (handles trailing text)
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start !== -1 && end > start) {
+    try {
+      const parsed = JSON.parse(text.slice(start, end + 1))
+      if (parsed && Array.isArray(parsed.items)) return parsed as InvoiceData
+    } catch { /* continue */ }
+  }
+
+  return null
+}
+
 export async function POST(req: NextRequest) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -86,28 +113,16 @@ ${content.slice(0, 14000)}`
     return NextResponse.json({ error: `Claude API error: ${String(e)}` }, { status: 500 })
   }
 
-  const jsonText = claudeResponse.trim()
+  const jsonText = claudeResponse
     .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/, '')
+    .replace(/\s*```\s*$/i, '')
     .trim()
 
-  let invoiceData: { invoice_number?: string | null; invoice_date?: string | null; total_amount?: number | null; items: InvoiceLineRaw[] } | null = null
-  try {
-    const parsed = JSON.parse(jsonText)
-    if (parsed && Array.isArray(parsed.items)) invoiceData = parsed
-  } catch {
-    const match = jsonText.match(/\{[\s\S]*/)
-    if (match) {
-      try {
-        const parsed = JSON.parse(match[0])
-        if (parsed && Array.isArray(parsed.items)) invoiceData = parsed
-      } catch { /* ignore */ }
-    }
-  }
+  const invoiceData = extractJsonObject(jsonText)
 
   if (!invoiceData) {
     return NextResponse.json({
-      error: `Could not parse Claude's response as JSON. First 300 chars: ${jsonText.slice(0, 300)}`
+      error: `Could not parse invoice response. First 300 chars: ${jsonText.slice(0, 300)}`
     }, { status: 422 })
   }
 
