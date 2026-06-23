@@ -21,6 +21,13 @@ interface InvoiceData {
   items: InvoiceItem[]
 }
 
+interface BoqRow {
+  id: string
+  description: string | null
+  chapter_name: string | null
+  item_code: string | null
+}
+
 function extractJsonObject(text: string): InvoiceData | null {
   try {
     const parsed = JSON.parse(text)
@@ -39,6 +46,29 @@ function extractJsonObject(text: string): InvoiceData | null {
 
 function normalizeText(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim()
+}
+
+function findBoqMatch(
+  desc: string,
+  boqItems: BoqRow[]
+): { id: string; notes: string } | null {
+  if (!boqItems.length) return null
+  const normDesc = normalizeText(desc)
+  const descWords = normDesc.split(/\s+/).filter(w => w.length > 3)
+  let bestScore = 0
+  let bestItem: BoqRow | null = null
+
+  for (const item of boqItems) {
+    const normItem = normalizeText(item.description ?? '')
+    const normChapter = normalizeText(item.chapter_name ?? '')
+    const matchWords = descWords.filter(w => normItem.includes(w) || normChapter.includes(w))
+    let score = descWords.length ? matchWords.length / descWords.length : 0
+    if (normChapter && descWords.some(w => normChapter.includes(w))) score += 0.2
+    if (score > bestScore) { bestScore = score; bestItem = item }
+  }
+
+  if (!bestItem || bestScore < 0.35) return null
+  return { id: bestItem.id, notes: `Matched with score ${bestScore.toFixed(2)}` }
 }
 
 export async function POST(req: NextRequest) {
@@ -117,26 +147,6 @@ ${content}`
       .select('id, description, chapter_name, item_code')
       .eq('project_id', projectId)
 
-    function findBoqMatch(desc: string): { id: string; status: string; notes: string } | null {
-      if (!boqItems?.length) return null
-      const normDesc = normalizeText(desc)
-      const descWords = normDesc.split(/\s+/).filter(w => w.length > 3)
-      let bestScore = 0
-      let bestItem: typeof boqItems[0] | null = null
-
-      for (const item of boqItems) {
-        const normItem = normalizeText(item.description ?? '')
-        const normChapter = normalizeText(item.chapter_name ?? '')
-        const matchWords = descWords.filter(w => normItem.includes(w) || normChapter.includes(w))
-        let score = descWords.length ? matchWords.length / descWords.length : 0
-        if (normChapter && descWords.some(w => normChapter.includes(w))) score += 0.2
-        if (score > bestScore) { bestScore = score; bestItem = item }
-      }
-
-      if (!bestItem || bestScore < 0.35) return null
-      return { id: bestItem.id, status: 'ok', notes: `Matched with score ${bestScore.toFixed(2)}` }
-    }
-
     const { data: invoice, error: invoiceError } = await supabase
       .from('invoices')
       .insert({
@@ -154,7 +164,7 @@ ${content}`
     if (invoiceError) throw invoiceError
 
     const itemRows = invoiceData.items.map((item) => {
-      const match = findBoqMatch(item.description ?? '')
+      const match = findBoqMatch(item.description ?? '', boqItems ?? [])
       return {
         invoice_id:   invoice.id,
         boq_item_id:  match?.id ?? null,
