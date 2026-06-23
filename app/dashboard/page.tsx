@@ -19,6 +19,8 @@ export default function AllProjectsPage() {
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [showNew, setShowNew] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<Project | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -41,6 +43,16 @@ export default function AllProjectsPage() {
     }
   }
 
+  async function deleteProject() {
+    if (!confirmDelete) return
+    setDeleting(true)
+    // CASCADE on DB handles boq_items, invoices, invoice_items
+    await supabase.from('projects').delete().eq('id', confirmDelete.id)
+    setProjects(prev => prev.filter(p => p.id !== confirmDelete.id))
+    setConfirmDelete(null)
+    setDeleting(false)
+  }
+
   const card: React.CSSProperties = { background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '1.5rem', cursor: 'pointer', transition: 'box-shadow .15s' }
 
   if (loading) {
@@ -61,6 +73,24 @@ export default function AllProjectsPage() {
 
   return (
     <div>
+      {/* Delete confirmation modal */}
+      {confirmDelete && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: 'white', borderRadius: '14px', padding: '2rem', maxWidth: '420px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,.2)' }}>
+            <h2 style={{ margin: '0 0 .75rem', fontSize: '1.1rem', fontWeight: 700, color: '#0f172a' }}>Delete project?</h2>
+            <p style={{ margin: '0 0 1.5rem', fontSize: '.9rem', color: '#475569' }}>
+              <strong>{confirmDelete.name}</strong> and all its BOQ items, invoices, and line items will be permanently deleted. This cannot be undone.
+            </p>
+            <div style={{ display: 'flex', gap: '.75rem', justifyContent: 'flex-end' }}>
+              <button onClick={() => setConfirmDelete(null)} disabled={deleting} style={{ padding: '.5rem 1rem', background: 'none', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '.875rem', cursor: 'pointer', color: '#64748b' }}>Cancel</button>
+              <button onClick={deleteProject} disabled={deleting} style={{ padding: '.5rem 1.25rem', background: '#dc2626', color: 'white', border: 'none', borderRadius: '8px', fontSize: '.875rem', fontWeight: 600, cursor: deleting ? 'not-allowed' : 'pointer' }}>
+                {deleting ? 'Deleting…' : 'Delete project'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 700, color: '#0f172a' }}>All Projects</h1>
@@ -105,11 +135,18 @@ export default function AllProjectsPage() {
           {projects.map(p => (
             <div
               key={p.id}
-              style={card}
+              style={{ ...card, position: 'relative' }}
               onClick={() => router.push(`/dashboard/${p.id}`)}
               onMouseEnter={e => (e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,.08)')}
               onMouseLeave={e => (e.currentTarget.style.boxShadow = 'none')}
             >
+              <button
+                onClick={e => { e.stopPropagation(); setConfirmDelete(p) }}
+                style={{ position: 'absolute', top: '.75rem', right: '.75rem', background: 'none', border: 'none', cursor: 'pointer', color: '#cbd5e1', fontSize: '1rem', lineHeight: 1, padding: '.25rem', borderRadius: '4px' }}
+                onMouseEnter={e => (e.currentTarget.style.color = '#ef4444')}
+                onMouseLeave={e => (e.currentTarget.style.color = '#cbd5e1')}
+                title="Delete project"
+              >✕</button>
               <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem', marginBottom: '.75rem' }}>
                 <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem', fontWeight: 700, color: '#2563eb', flexShrink: 0 }}>
                   {p.name.charAt(0).toUpperCase()}

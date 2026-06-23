@@ -56,6 +56,8 @@ export default function InvoicesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detailItems, setDetailItems] = useState<InvoiceItem[]>([])
   const [detailLoading, setDetailLoading] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<Invoice | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => { loadInvoices() }, []) // eslint-disable-line
 
@@ -100,13 +102,16 @@ export default function InvoicesPage() {
     }
   }
 
-  async function deleteInvoice(id: string, e: React.MouseEvent) {
-    e.stopPropagation()
-    if (!confirm('Delete this invoice and all its line items?')) return
-    await supabase.from('invoice_items').delete().eq('invoice_id', id)
-    await supabase.from('invoices').delete().eq('id', id)
-    setInvoices(prev => prev.filter(i => i.id !== id))
-    if (selectedId === id) { setSelectedId(null); setDetailItems([]) }
+  async function confirmAndDelete() {
+    if (!confirmDelete) return
+    setDeleting(true)
+    // CASCADE on DB handles invoice_items, but delete explicitly for safety
+    await supabase.from('invoice_items').delete().eq('invoice_id', confirmDelete.id)
+    await supabase.from('invoices').delete().eq('id', confirmDelete.id)
+    setInvoices(prev => prev.filter(i => i.id !== confirmDelete.id))
+    if (selectedId === confirmDelete.id) { setSelectedId(null); setDetailItems([]) }
+    setConfirmDelete(null)
+    setDeleting(false)
   }
 
   async function loadDetail(invoiceId: string, invoiceStatus: string) {
@@ -212,6 +217,25 @@ export default function InvoicesPage() {
 
   return (
     <div>
+      {/* Delete confirmation modal */}
+      {confirmDelete && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: 'white', borderRadius: '14px', padding: '2rem', maxWidth: '420px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,.2)' }}>
+            <h2 style={{ margin: '0 0 .75rem', fontSize: '1.1rem', fontWeight: 700, color: '#0f172a' }}>Delete invoice?</h2>
+            <p style={{ margin: '0 0 1.5rem', fontSize: '.9rem', color: '#475569' }}>
+              Invoice <strong>#{confirmDelete.invoice_number ?? '—'}</strong>
+              {confirmDelete.supplier ? ` from ${confirmDelete.supplier}` : ''} and all its line items will be permanently deleted. This cannot be undone.
+            </p>
+            <div style={{ display: 'flex', gap: '.75rem', justifyContent: 'flex-end' }}>
+              <button onClick={() => setConfirmDelete(null)} disabled={deleting} style={{ padding: '.5rem 1rem', background: 'none', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '.875rem', cursor: 'pointer', color: '#64748b' }}>Cancel</button>
+              <button onClick={confirmAndDelete} disabled={deleting} style={{ padding: '.5rem 1.25rem', background: '#dc2626', color: 'white', border: 'none', borderRadius: '8px', fontSize: '.875rem', fontWeight: 600, cursor: deleting ? 'not-allowed' : 'pointer' }}>
+                {deleting ? 'Deleting…' : 'Delete invoice'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
         <div>
           <h1 style={{ margin: '0 0 .25rem', fontSize: '1.5rem', fontWeight: 700, color: '#0f172a' }}>Invoices</h1>
@@ -304,7 +328,7 @@ export default function InvoicesPage() {
                       </button>
                     </td>
                     <td style={{ ...td(), textAlign: 'right' }}>
-                      <button onClick={e => deleteInvoice(inv.id, e)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: '.85rem', padding: '.25rem .5rem' }} title="Delete">✕</button>
+                      <button onClick={e => { e.stopPropagation(); setConfirmDelete(inv) }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: '.85rem', padding: '.25rem .5rem' }} title="Delete">✕</button>
                     </td>
                   </tr>
                 ))}
