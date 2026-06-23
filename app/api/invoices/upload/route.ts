@@ -156,7 +156,7 @@ ${content}`
       .from('invoices')
       .insert({
         project_id:     projectId,
-        invoice_number: invoiceData.invoice_number ?? null,
+        invoice_number: invoiceData.invoice_number ?? '9999',
         supplier:       invoiceData.supplier       ?? null,
         invoice_date:   invoiceData.invoice_date   ?? null,
         total_amount:   invoiceData.total_amount   ?? null,
