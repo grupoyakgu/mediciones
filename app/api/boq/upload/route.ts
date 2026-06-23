@@ -4,21 +4,26 @@ import { cookies } from 'next/headers'
 import { isSupportedFile, parseFile } from '@/lib/file-parser'
 import { claudeCreate } from '@/lib/claude'
 
+function stripFences(text: string): string {
+  return text.replace(/^```[\w]*\n?/m, '').replace(/```\s*$/m, '').trim()
+}
+
 function extractJsonArray(text: string): Record<string, unknown>[] | null {
-  const start = text.indexOf('[')
+  const cleaned = stripFences(text)
+  const start = cleaned.indexOf('[')
   if (start === -1) return null
   try {
-    const parsed = JSON.parse(text)
+    const parsed = JSON.parse(cleaned)
     if (Array.isArray(parsed)) return parsed
   } catch {}
-  const end = text.lastIndexOf(']')
+  const end = cleaned.lastIndexOf(']')
   if (end > start) {
     try {
-      const parsed = JSON.parse(text.slice(start, end + 1))
+      const parsed = JSON.parse(cleaned.slice(start, end + 1))
       if (Array.isArray(parsed)) return parsed
     } catch {}
   }
-  const candidate = text.slice(start)
+  const candidate = cleaned.slice(start)
   const lastObj = candidate.lastIndexOf('},')
   const closeAt = lastObj !== -1 ? lastObj + 1 : candidate.lastIndexOf('}')
   if (closeAt > 0) {
@@ -50,7 +55,7 @@ export async function POST(req: NextRequest) {
       max_tokens: 8192,
       messages: [{
         role: 'user',
-        content: `Extract all BOQ (Bill of Quantities / Presupuesto de Obra) line items from this document and return ONLY a JSON array.
+        content: `Extract all BOQ (Bill of Quantities / Presupuesto de Obra) line items from this document and return ONLY a JSON array with no markdown formatting.
 
 Column mapping (Spanish → field name):
 - Capítulo / Cap. / Título → chapter_id and chapter_name
@@ -62,7 +67,7 @@ Column mapping (Spanish → field name):
 - Importe / Total / Presupuesto → total_amount (number)
 
 Rules:
-- Return ONLY a JSON array, no other text before or after
+- Return ONLY a raw JSON array starting with [ and ending with ], no code blocks, no explanation
 - Each element: { "chapter_id", "chapter_name", "item_code", "description", "unit", "quantity", "unit_price", "total_amount" }
 - Use null for missing numeric fields, empty string "" for missing text
 - Numbers must be plain numbers (no currency symbols, no thousands separators)

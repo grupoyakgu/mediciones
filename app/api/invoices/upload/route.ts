@@ -28,16 +28,21 @@ interface BoqRow {
   item_code: string | null
 }
 
+function stripFences(text: string): string {
+  return text.replace(/^```[\w]*\n?/m, '').replace(/```\s*$/m, '').trim()
+}
+
 function extractJsonObject(text: string): InvoiceData | null {
+  const cleaned = stripFences(text)
   try {
-    const parsed = JSON.parse(text)
+    const parsed = JSON.parse(cleaned)
     if (parsed && Array.isArray(parsed.items)) return parsed
   } catch {}
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
+  const start = cleaned.indexOf('{')
+  const end = cleaned.lastIndexOf('}')
   if (start !== -1 && end > start) {
     try {
-      const parsed = JSON.parse(text.slice(start, end + 1))
+      const parsed = JSON.parse(cleaned.slice(start, end + 1))
       if (parsed && Array.isArray(parsed.items)) return parsed
     } catch {}
   }
@@ -91,7 +96,7 @@ export async function POST(req: NextRequest) {
       max_tokens: 8192,
       messages: [{
         role: 'user',
-        content: `Extract invoice data from this document and return ONLY a JSON object.
+        content: `Extract invoice data from this document and return ONLY a raw JSON object with no markdown formatting.
 
 Return format:
 {
@@ -112,7 +117,7 @@ Return format:
 }
 
 Spanish column names: Descripción/Concepto=description, Ud/Unidad=unit, Cantidad/Medición=quantity, Precio/P.U.=unit_price, Importe/Total=total_amount.
-Return ONLY the JSON object, no other text.
+Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
 
 Document:
 ${content}`
