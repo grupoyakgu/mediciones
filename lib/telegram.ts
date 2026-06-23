@@ -1,10 +1,10 @@
 export class TelegramClient {
   private readonly apiBase: string;
 
-  constructor() {
-    const token = process.env.TELEGRAM_BOT_TOKEN;
-    if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
-    this.apiBase = `https://api.telegram.org/bot${token}`;
+  constructor(token?: string) {
+    const t = token ?? process.env.TELEGRAM_BOT_TOKEN;
+    if (!t) throw new Error("Telegram bot token is not set");
+    this.apiBase = `https://api.telegram.org/bot${t}`;
   }
 
   async sendMessage(chatId: number, text: string): Promise<void> {

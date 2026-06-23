@@ -2,9 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { chatArchitect } from "@/lib/architect-agent";
 import { TelegramClient } from "@/lib/telegram";
 
-const telegram = new TelegramClient({
-  token: process.env.ARCHITECT_BOT_TOKEN,
-});
+const telegram = new TelegramClient(process.env.ARCHITECT_BOT_TOKEN);
 
 export async function POST(req: NextRequest) {
   try {
