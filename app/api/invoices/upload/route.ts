@@ -191,7 +191,9 @@ ${content}`
     const alertCount = itemRows.filter(r => r.match_status !== 'ok').length
     return NextResponse.json({ success: true, invoiceId: invoice.id, itemCount: itemRows.length, alertCount })
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = err instanceof Error
+      ? err.message
+      : (err as { message?: string })?.message ?? JSON.stringify(err)
     return NextResponse.json({ error: `Invoice upload error: ${msg}` }, { status: 500 })
   }
 }
