@@ -1,4 +1,4 @@
-// Navigation is handled by the sidebar Sidebar.tsx — this file is kept for compatibility
-export default function ProjectNav({ projectId: _ }: { projectId: string }) {
+// Navigation is handled by Sidebar.tsx
+export default function ProjectNav(_props: { projectId: string }) {
   return null
 }
