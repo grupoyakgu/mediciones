@@ -26,7 +26,8 @@ export default async function OverviewPage({ params }: { params: { projectId: st
   const [{ data: project }, { data: boqItems }, { data: invoices }] = await Promise.all([
     supabase.from('projects').select('name, currency, alert_threshold_pct, boq_file_name').eq('id', projectId).single(),
     supabase.from('boq_items').select('id, chapter_name, total_amount').eq('project_id', projectId),
-    supabase.from('invoices').select('id, total_amount, created_at').eq('project_id', projectId).order('created_at'),
+    // Only approved invoices count towards the summary
+    supabase.from('invoices').select('id, total_amount, created_at').eq('project_id', projectId).eq('status', 'approved').order('created_at'),
   ])
 
   const invoiceIds = (invoices ?? []).map(i => i.id)
@@ -50,9 +51,7 @@ export default async function OverviewPage({ params }: { params: { projectId: st
     chapterMap.set(ch, existing)
   }
   const boqChapterMap = new Map<string, string>()
-  for (const item of boqItems ?? []) {
-    boqChapterMap.set(item.id, item.chapter_name || 'Sin capítulo')
-  }
+  for (const item of boqItems ?? []) boqChapterMap.set(item.id, item.chapter_name || 'Sin capítulo')
   for (const item of invoiceItems ?? []) {
     if (item.boq_item_id) {
       const ch = boqChapterMap.get(item.boq_item_id)
@@ -75,29 +74,24 @@ export default async function OverviewPage({ params }: { params: { projectId: st
     cumData.push({ date: inv.created_at.slice(0, 10), cumulative: running })
   }
 
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('es-ES', { style: 'currency', currency }).format(n)
+  const fmt = (n: number) => new Intl.NumberFormat('es-ES', { style: 'currency', currency }).format(n)
 
   return (
     <div className="space-y-8">
-      {/* Page header */}
       <div className="border-b border-gray-200 pb-6">
         <h1 className="text-xl font-semibold text-gray-900">{projectName}</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Overview</p>
+        <p className="text-sm text-gray-500 mt-0.5">Overview · approved invoices only</p>
       </div>
 
-      {/* KPI cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard label="Total Budget" value={fmt(totalBudget)} />
-        <KpiCard label="Total Invoiced" value={fmt(totalInvoiced)} />
+        <KpiCard label="Approved Invoiced" value={fmt(totalInvoiced)} />
         <KpiCard label="Budget Used" value={`${pctUsed.toFixed(1)}%`} warn={pctUsed >= threshold} />
         <KpiCard label="Alerts" value={String(alertCount)} warn={alertCount > 0} />
       </div>
 
-      {/* Charts */}
       <OverviewCharts chapterData={chapterData} cumData={cumData} currency={currency} />
 
-      {/* BOQ Table */}
       <BoqTable projectId={projectId} />
     </div>
   )
@@ -105,13 +99,9 @@ export default async function OverviewPage({ params }: { params: { projectId: st
 
 function KpiCard({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
   return (
-    <div className={`bg-white rounded-xl border p-5 ${
-      warn ? 'border-amber-200' : 'border-gray-200'
-    }`}>
+    <div className={`bg-white rounded-xl border p-5 ${warn ? 'border-amber-200' : 'border-gray-200'}`}>
       <p className="text-xs text-gray-400 font-medium uppercase tracking-wider">{label}</p>
-      <p className={`text-2xl font-bold mt-2 ${
-        warn ? 'text-amber-600' : 'text-gray-900'
-      }`}>{value}</p>
+      <p className={`text-2xl font-bold mt-2 ${warn ? 'text-amber-600' : 'text-gray-900'}`}>{value}</p>
       {warn && <p className="text-xs text-amber-500 mt-1">Needs attention</p>}
     </div>
   )
