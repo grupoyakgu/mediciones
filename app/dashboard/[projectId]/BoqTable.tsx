@@ -14,11 +14,17 @@ interface BoqItem {
   total_amount: number | null
 }
 
-type SortField = 'description' | 'unit_price' | 'total_amount' | 'chapter'
+type SortField = 'description' | 'unit_price' | 'effective_total' | 'chapter'
 type SortDir = 'asc' | 'desc'
 
 const fmt = (n: number | null) =>
   n == null ? '—' : n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+// Use stored total_amount, fall back to qty * unit_price
+function effectiveTotal(item: BoqItem): number {
+  if (item.total_amount != null && item.total_amount !== 0) return item.total_amount
+  return (item.quantity ?? 0) * (item.unit_price ?? 0)
+}
 
 export default function BoqTable({ projectId }: { projectId: string }) {
   const supabase = createClient()
@@ -67,13 +73,13 @@ export default function BoqTable({ projectId }: { projectId: string }) {
     if (chapterFilter !== 'all') rows = rows.filter(r => (r.chapter_id ?? '') === chapterFilter)
     const min = parseFloat(minPrice)
     const max = parseFloat(maxPrice)
-    if (!isNaN(min)) rows = rows.filter(r => (r.total_amount ?? 0) >= min)
-    if (!isNaN(max)) rows = rows.filter(r => (r.total_amount ?? 0) <= max)
+    if (!isNaN(min)) rows = rows.filter(r => effectiveTotal(r) >= min)
+    if (!isNaN(max)) rows = rows.filter(r => effectiveTotal(r) <= max)
     return rows.slice().sort((a, b) => {
       let cmp = 0
       if (sortField === 'description') cmp = a.description.localeCompare(b.description)
       else if (sortField === 'unit_price') cmp = (a.unit_price ?? 0) - (b.unit_price ?? 0)
-      else if (sortField === 'total_amount') cmp = (a.total_amount ?? 0) - (b.total_amount ?? 0)
+      else if (sortField === 'effective_total') cmp = effectiveTotal(a) - effectiveTotal(b)
       else cmp = (a.chapter_id ?? '').localeCompare(b.chapter_id ?? '')
       return sortDir === 'asc' ? cmp : -cmp
     })
@@ -86,7 +92,7 @@ export default function BoqTable({ projectId }: { projectId: string }) {
       const name = item.chapter_name ?? item.chapter_id ?? 'Uncategorised'
       const entry = map.get(key) ?? { name, count: 0, total: 0 }
       entry.count++
-      entry.total += item.total_amount ?? 0
+      entry.total += effectiveTotal(item)
       map.set(key, entry)
     }
     return Array.from(map.entries())
@@ -132,7 +138,6 @@ export default function BoqTable({ projectId }: { projectId: string }) {
 
   return (
     <div>
-      {/* Header */}
       <div style={{ marginBottom: '1rem' }}>
         <h2 style={{ margin: '0 0 .25rem', fontSize: '1.1rem', fontWeight: 600, color: '#0f172a' }}>Bill of Quantities</h2>
         <p style={{ margin: 0, fontSize: '.85rem', color: '#64748b' }}>{items.length} line items · {chapters.length} chapters</p>
@@ -219,27 +224,30 @@ export default function BoqTable({ projectId }: { projectId: string }) {
                 <th style={th()}>Unit</th>
                 <th style={{ ...th(), textAlign: 'right' }}>Qty</th>
                 <th style={{ ...th(true), textAlign: 'right' }} onClick={() => toggleSort('unit_price')}>Unit Price{arrow('unit_price')}</th>
-                <th style={{ ...th(true), textAlign: 'right' }} onClick={() => toggleSort('total_amount')}>Total (€){arrow('total_amount')}</th>
+                <th style={{ ...th(true), textAlign: 'right' }} onClick={() => toggleSort('effective_total')}>Total (€){arrow('effective_total')}</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
                 <tr><td colSpan={7} style={{ padding: '3rem', textAlign: 'center', color: '#94a3b8' }}>No items match the current filters.</td></tr>
-              ) : filtered.map(item => (
-                <tr key={item.id}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#f8fafc')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'white')}>
-                  <td style={{ ...td(), color: '#64748b', fontSize: '.78rem', whiteSpace: 'nowrap' }}>
-                    {item.chapter_id && <span style={{ background: '#eff6ff', color: '#1d4ed8', padding: '.15rem .45rem', borderRadius: '4px', fontWeight: 600 }}>{item.chapter_id}</span>}
-                  </td>
-                  <td style={{ ...td(), color: '#64748b', fontSize: '.78rem', whiteSpace: 'nowrap' }}>{item.item_code ?? '—'}</td>
-                  <td style={td()}>{item.description}</td>
-                  <td style={td(false, true)}>{item.unit ?? '—'}</td>
-                  <td style={td(true, true)}>{item.quantity != null ? item.quantity.toLocaleString('es-ES') : '—'}</td>
-                  <td style={td(true)}>{fmt(item.unit_price)}</td>
-                  <td style={{ ...td(true), fontWeight: item.total_amount ? 500 : 400 }}>{fmt(item.total_amount)}</td>
-                </tr>
-              ))}
+              ) : filtered.map(item => {
+                const total = effectiveTotal(item)
+                return (
+                  <tr key={item.id}
+                    onMouseEnter={e => (e.currentTarget.style.background = '#f8fafc')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'white')}>
+                    <td style={{ ...td(), color: '#64748b', fontSize: '.78rem', whiteSpace: 'nowrap' }}>
+                      {item.chapter_id && <span style={{ background: '#eff6ff', color: '#1d4ed8', padding: '.15rem .45rem', borderRadius: '4px', fontWeight: 600 }}>{item.chapter_id}</span>}
+                    </td>
+                    <td style={{ ...td(), color: '#64748b', fontSize: '.78rem', whiteSpace: 'nowrap' }}>{item.item_code ?? '—'}</td>
+                    <td style={td()}>{item.description}</td>
+                    <td style={td(false, true)}>{item.unit ?? '—'}</td>
+                    <td style={td(true, true)}>{item.quantity != null ? item.quantity.toLocaleString('es-ES') : '—'}</td>
+                    <td style={td(true)}>{fmt(item.unit_price)}</td>
+                    <td style={{ ...td(true), fontWeight: total ? 500 : 400 }}>{fmt(total || null)}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
