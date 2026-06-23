@@ -24,19 +24,17 @@ export async function parseFile(buffer: Buffer, mimeType: string, fileName: stri
     return buffer.toString("utf-8").trim();
   }
 
-  // PDF
+  // PDF — use unpdf (PDF.js based, handles compressed/signed PDFs)
   if (ext === "pdf" || mimeType === "application/pdf") {
-    const raw = buffer.toString("latin1");
-    const chunks: string[] = [];
-    const regex = /\(([^\\)]{4,})\)/g;
-    let match;
-    while ((match = regex.exec(raw)) !== null) {
-      const str = match[1].replace(/\\n/g, "\n").replace(/\\r/g, "").replace(/\\/g, "");
-      if (/[a-zA-ZÀ-ÿ]{3,}/.test(str)) chunks.push(str);
+    try {
+      const { extractText } = await import("unpdf");
+      const { text } = await extractText(new Uint8Array(buffer), { mergePages: true });
+      if (text && text.trim().length > 0) return text.trim();
+    } catch (e) {
+      console.error("unpdf error:", e);
     }
-    if (chunks.length > 0) return chunks.join("\n").trim();
-    return "[PDF recibido pero no se pudo extraer texto. Por favor, envía el archivo en formato CSV o Excel.]";
+    return "[PDF received but text could not be extracted. Please try sending as CSV or Excel instead.]";
   }
 
-  throw new Error(`Formato no soportado: ${mimeType} (${fileName})`);
+  throw new Error(`Unsupported format: ${mimeType} (${fileName})`);
 }
