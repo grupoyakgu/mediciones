@@ -5,7 +5,7 @@ import { isSupportedFile, parseFile } from '@/lib/file-parser'
 import { claudeCreate } from '@/lib/claude'
 
 function stripFences(text: string): string {
-  return text.replace(/^```[\w]*\s*/s, '').replace(/\s*```\s*$/s, '').trim()
+  return text.replace(/^```[\w]*[\r\n]?/, '').replace(/[\r\n]?```\s*$/, '').trim()
 }
 
 function extractJsonArray(text: string): Record<string, unknown>[] | null {
