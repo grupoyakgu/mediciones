@@ -157,7 +157,7 @@ function matchItems(newItems: RawItem[], refItems: RawItem[]): MatchedItem[] {
   })
 }
 
-function groupByChapter(items: MatchedItem[], totalCost: number): Chapter[] {
+function groupByChapter(items: MatchedItem[]): Chapter[] {
   const map = new Map<string, MatchedItem[]>()
   for (const item of items) {
     const key = item.chapter_id
@@ -295,7 +295,7 @@ export default function PricingPage() {
 
     const matched = matchItems(unpricedItems, refItems)
     const totalCost = matched.reduce((s, i) => s + (i.effectiveTotal ?? 0), 0)
-    const grouped = groupByChapter(matched, totalCost)
+    const grouped = groupByChapter(matched)
     setChapters(grouped)
     setExpandedChapters(new Set(grouped.map(c => c.id)))
     setStep('results')
