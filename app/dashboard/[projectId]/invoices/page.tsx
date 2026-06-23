@@ -118,7 +118,7 @@ export default function InvoicesPage() {
 
     if (!items?.length) { setDetailItems([]); setDetailLoading(false); return }
 
-    const boqIds = [...new Set(items.filter(i => i.boq_item_id).map(i => i.boq_item_id as string))]
+    const boqIds = Array.from(new Set(items.filter(i => i.boq_item_id).map(i => i.boq_item_id as string)))
 
     const boqMap = new Map<string, { quantity: number | null; unit_price: number | null }>()
     if (boqIds.length) {
