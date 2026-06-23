@@ -2,6 +2,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import OverviewCharts from './OverviewCharts'
 import BoqTable from './BoqTable'
+import BoqSection from './BoqSection'
 
 function makeSupabase() {
   const cookieStore = cookies()
@@ -24,7 +25,7 @@ export default async function OverviewPage({ params }: { params: { projectId: st
   const { projectId } = params
 
   const [{ data: project }, { data: boqItems }, { data: invoices }] = await Promise.all([
-    supabase.from('projects').select('name, currency, alert_threshold_pct, boq_file_name').eq('id', projectId).single(),
+    supabase.from('projects').select('name, currency, alert_threshold_pct, boq_file_name, boq_uploaded').eq('id', projectId).single(),
     supabase.from('boq_items').select('id, chapter_name, total_amount').eq('project_id', projectId),
     // Only approved invoices count towards the summary
     supabase.from('invoices').select('id, total_amount, created_at').eq('project_id', projectId).eq('status', 'approved').order('created_at'),
@@ -42,6 +43,7 @@ export default async function OverviewPage({ params }: { params: { projectId: st
   const currency = (project as { currency?: string } | null)?.currency ?? 'EUR'
   const threshold = (project as { alert_threshold_pct?: number } | null)?.alert_threshold_pct ?? 90
   const projectName = (project as { name?: string } | null)?.name ?? ''
+  const boqUploaded = (project as { boq_uploaded?: boolean } | null)?.boq_uploaded ?? false
 
   const chapterMap = new Map<string, { budget: number; invoiced: number }>()
   for (const item of boqItems ?? []) {
@@ -91,6 +93,8 @@ export default async function OverviewPage({ params }: { params: { projectId: st
       </div>
 
       <OverviewCharts chapterData={chapterData} cumData={cumData} currency={currency} />
+
+      <BoqSection projectId={projectId} boqUploaded={boqUploaded} />
 
       <BoqTable projectId={projectId} />
     </div>

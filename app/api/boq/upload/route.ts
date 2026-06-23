@@ -1,152 +1,190 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
-import { isSupportedFile, parseFile } from '@/lib/file-parser'
-import { claudeCreate } from '@/lib/claude'
+import { NextRequest } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
+import * as XLSX from 'xlsx'
 
-function stripFences(text: string): string {
-  return text.replace(/^```[\w]*[\r\n]?/, '').replace(/[\r\n]?```\s*$/, '').trim()
+interface BoqRow {
+  chapter_id: string
+  chapter_name: string
+  item_code: string
+  description: string
+  unit: string
+  quantity: number | null
+  unit_price: number | null
+  total_amount: number | null
 }
 
-function extractJsonArray(text: string): Record<string, unknown>[] | null {
-  const cleaned = stripFences(text)
+function toNum(v: unknown): number | null {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  return isNaN(n) ? null : n
+}
 
-  // Try full parse first
-  const start = cleaned.indexOf('[')
-  if (start === -1) return null
+function parseXlsx(buffer: ArrayBuffer): BoqRow[] {
+  const workbook = XLSX.read(buffer, { type: 'array' })
+  const sheet = workbook.Sheets[workbook.SheetNames[0]]
+  const rawRows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true })
 
-  try {
-    const parsed = JSON.parse(cleaned.slice(start))
-    if (Array.isArray(parsed)) return parsed
-  } catch {}
+  const chapterNames = new Map<string, string>()
+  const items: BoqRow[] = []
 
-  // Try up to last ]
-  const end = cleaned.lastIndexOf(']')
-  if (end > start) {
-    try {
-      const parsed = JSON.parse(cleaned.slice(start, end + 1))
-      if (Array.isArray(parsed)) return parsed
-    } catch {}
+  for (const row of rawRows) {
+    if (!Array.isArray(row)) continue
+    const code = String(row[0] ?? '').trim()
+    const nat  = String(row[1] ?? '').trim()
+    const unit = String(row[2] ?? '').trim()
+    const desc = String(row[3] ?? '').trim()
+
+    if (!code || !nat) continue
+
+    if (nat === 'Capítulo' || nat === 'Capitulo') {
+      chapterNames.set(code, desc)
+    } else if (nat === 'Partida') {
+      const topChapter = code.split('.')[0]
+      items.push({
+        chapter_id: code,
+        chapter_name: chapterNames.get(topChapter) ?? '',
+        item_code: code,
+        description: desc,
+        unit,
+        quantity: toNum(row[4]),
+        unit_price: toNum(row[5]),
+        total_amount: toNum(row[6]),
+      })
+    }
   }
 
-  // Truncation recovery: find last complete object (last },) and close the array
-  const candidate = cleaned.slice(start)
-  const lastComma = candidate.lastIndexOf('},')
-  if (lastComma !== -1) {
-    try {
-      // slice up to and including } (not the comma), then close array
-      const parsed = JSON.parse(candidate.slice(0, lastComma + 1) + ']')
-      if (Array.isArray(parsed)) return parsed
-    } catch {}
-  }
-  // Last resort: find last } and close array
-  const lastBrace = candidate.lastIndexOf('}')
-  if (lastBrace > 0) {
-    try {
-      const parsed = JSON.parse(candidate.slice(0, lastBrace + 1) + ']')
-      if (Array.isArray(parsed)) return parsed
-    } catch {}
+  return items
+}
+
+function parseCsv(text: string): BoqRow[] {
+  const lines = text.split(/\r?\n/)
+  const chapterNames = new Map<string, string>()
+  const items: BoqRow[] = []
+
+  for (const line of lines) {
+    const cols = line.split(',')
+    const code = cols[0]?.trim() ?? ''
+    const nat  = cols[1]?.trim() ?? ''
+    const unit = cols[2]?.trim() ?? ''
+    const desc = cols[3]?.trim() ?? ''
+
+    if (!code || !nat) continue
+
+    if (nat === 'Capítulo' || nat === 'Capitulo') {
+      chapterNames.set(code, desc)
+    } else if (nat === 'Partida') {
+      const topChapter = code.split('.')[0]
+      items.push({
+        chapter_id: code,
+        chapter_name: chapterNames.get(topChapter) ?? '',
+        item_code: code,
+        description: desc,
+        unit,
+        quantity: toNum(cols[4]?.replace(/"/g, '').replace(/,/g, '')),
+        unit_price: toNum(cols[5]?.replace(/"/g, '').replace(/,/g, '')),
+        total_amount: toNum(cols[6]?.replace(/"/g, '').replace(/,/g, '')),
+      })
+    }
   }
 
-  return null
+  return items
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    const formData = await req.formData()
-    const file = formData.get('file') as File | null
-    const projectId = formData.get('projectId') as string | null
+  const enc = new TextEncoder()
 
-    if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
-    if (!projectId) return NextResponse.json({ error: 'No projectId provided' }, { status: 400 })
-    if (!isSupportedFile(file.type, file.name)) {
-      return NextResponse.json({ error: 'Unsupported file type. Please upload PDF, CSV, or Excel.' }, { status: 400 })
-    }
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (data: Record<string, unknown>) =>
+        controller.enqueue(enc.encode(JSON.stringify(data) + '\n'))
 
-    const buffer = Buffer.from(await file.arrayBuffer())
-    const content = await parseFile(buffer, file.type, file.name)
+      try {
+        const formData = await req.formData()
+        const file = formData.get('file') as File | null
+        const projectId = formData.get('projectId') as string | null
 
-    const message = await claudeCreate({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 8192,
-      messages: [{
-        role: 'user',
-        content: `Extract all BOQ (Bill of Quantities / Presupuesto de Obra) line items from this document and return ONLY a JSON array with no markdown formatting.
-
-Column mapping (Spanish → field name):
-- Capítulo / Cap. / Título → chapter_id and chapter_name
-- Partida / Cod. / Código → item_code
-- Descripción / Concepto / Nombre → description
-- Ud / Uds / Unidad / Medida → unit
-- Medición / Cantidad / Nº → quantity (number)
-- Precio / P.U. / Precio Unitario → unit_price (number)
-- Importe / Total / Presupuesto → total_amount (number)
-
-Rules:
-- Return ONLY a raw JSON array starting with [ and ending with ], no code blocks, no explanation
-- Each element: { "chapter_id", "chapter_name", "item_code", "description", "unit", "quantity", "unit_price", "total_amount" }
-- Use null for missing numeric fields, empty string "" for missing text
-- Numbers must be plain numbers (no currency symbols, no thousands separators)
-- Chapter/section header rows: set item_code to the chapter code, description to the chapter title, numeric fields to null
-
-Document content:
-${content}`
-      }]
-    })
-
-    const rawText = message.content[0].type === 'text' ? message.content[0].text : ''
-    const items = extractJsonArray(rawText)
-    if (!items) {
-      return NextResponse.json(
-        { error: `Could not find a JSON array in Claude's response. First 300 chars: ${rawText.slice(0, 300)}` },
-        { status: 500 }
-      )
-    }
-
-    const cookieStore = cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll: () => cookieStore.getAll(),
-          setAll: (toSet: { name: string; value: string; options: Parameters<typeof cookieStore.set>[2] }[]) => {
-            toSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options))
-          }
+        if (!file || !projectId) {
+          send({ error: 'Missing file or projectId' })
+          controller.close()
+          return
         }
+
+        const supabase = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+        )
+
+        // Parse file
+        send({ phase: 'parsing' })
+        const filename = file.name.toLowerCase()
+        let items: BoqRow[] = []
+
+        if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
+          const buffer = await file.arrayBuffer()
+          items = parseXlsx(buffer)
+        } else {
+          const text = await file.text()
+          items = parseCsv(text)
+        }
+
+        if (items.length === 0) {
+          send({ error: 'No BOQ items found. Check that column B contains "Partida" or "Capítulo".' })
+          controller.close()
+          return
+        }
+
+        // Delete existing BOQ items for this project first
+        send({ phase: 'clearing' })
+        const { error: delError } = await supabase
+          .from('boq_items')
+          .delete()
+          .eq('project_id', projectId)
+        if (delError) throw new Error('Failed to clear existing BOQ: ' + delError.message)
+
+        send({ phase: 'importing', total: items.length })
+
+        // Insert in batches, streaming progress after each batch
+        const BATCH = 100
+        let imported = 0
+
+        for (let i = 0; i < items.length; i += BATCH) {
+          const batch = items.slice(i, i + BATCH).map((item) => ({
+            project_id: projectId,
+            chapter_id: item.chapter_id,
+            chapter_name: item.chapter_name,
+            item_code: item.item_code,
+            description: item.description,
+            unit: item.unit,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            total_amount: item.total_amount,
+          }))
+
+          const { error } = await supabase.from('boq_items').insert(batch)
+          if (error) throw new Error(error.message)
+
+          imported += batch.length
+          send({ imported, total: items.length })
+        }
+
+        await supabase.from('projects').update({ boq_uploaded: true }).eq('id', projectId)
+        send({ done: true, count: imported })
+      } catch (err) {
+        console.error('[boq/upload]', err)
+        try {
+          controller.enqueue(enc.encode(JSON.stringify({ error: String(err) }) + '\n'))
+        } catch { /* stream already closed */ }
+      } finally {
+        controller.close()
       }
-    )
+    },
+  })
 
-    const { error: deleteError } = await supabase
-      .from('boq_items')
-      .delete()
-      .eq('project_id', projectId)
-    if (deleteError) throw deleteError
-
-    const rows = items.map((item) => ({
-      project_id:   projectId,
-      chapter_id:   String(item.chapter_id   ?? ''),
-      chapter_name: String(item.chapter_name ?? ''),
-      item_code:    String(item.item_code    ?? ''),
-      description:  String(item.description  ?? ''),
-      unit:         item.unit        != null ? String(item.unit) : null,
-      quantity:     item.quantity    != null ? Number(item.quantity)   : null,
-      unit_price:   item.unit_price  != null ? Number(item.unit_price) : null,
-      total_amount: item.total_amount != null ? Number(item.total_amount) : null,
-    }))
-
-    const { error: insertError } = await supabase.from('boq_items').insert(rows)
-    if (insertError) throw insertError
-
-    const { error: updateError } = await supabase
-      .from('projects')
-      .update({ boq_file_name: file.name, boq_uploaded_at: new Date().toISOString() })
-      .eq('id', projectId)
-    if (updateError) throw updateError
-
-    return NextResponse.json({ success: true, itemCount: rows.length })
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: `Claude API error: ${msg}` }, { status: 500 })
-  }
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson',
+      'Cache-Control': 'no-cache',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  })
 }
