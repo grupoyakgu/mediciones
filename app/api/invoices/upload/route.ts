@@ -18,6 +18,9 @@ interface InvoiceData {
   invoice_date?: string
   total_amount?: number
   currency?: string
+  total_ejecucion_material?: number
+  a_deducir?: number
+  total_certificacion?: number
   items: InvoiceItem[]
 }
 
@@ -95,12 +98,15 @@ export async function POST(req: NextRequest) {
     // Build the message content — PDFs go in as base64 documents, others as parsed text
     const promptText = `Extract invoice/certification data from this document and return ONLY a raw JSON object with no markdown formatting.
 
-This may be a Spanish construction "Certificación" (payment certificate). In that case:
+This may be a Spanish construction "Certificación" (payment certificate). In that case extract:
 - invoice_number = the certification number (e.g. "4" for "Certificación Nº 4")
 - supplier = contractor company name
 - invoice_date = date on the document (YYYY-MM-DD)
-- total_amount = the NET amount due for this certificate (TOTAL CERTIFICACIÓN SIN IVA, NOT the cumulative total)
-- items = one item per chapter (Capítulo), with description = chapter name, total_amount = chapter total
+- total_amount = the NET amount due for THIS certificate only (TOTAL CERTIFICACIÓN SIN IVA, NOT the cumulative total)
+- total_ejecucion_material = the "TOTAL EJECUCIÓN MATERIAL" amount (sum of all chapter totals before any deductions)
+- a_deducir = the "A deducir certificación anterior" amount (previous certification deduction, positive number)
+- total_certificacion = the "TOTAL CERTIFICACIÓN" amount after applying retention/guarantee deduction
+- items = one entry per CAPÍTULO (chapter), with description = full chapter name/title, total_amount = that chapter's total amount for this certification period
 
 Return format:
 {
@@ -109,18 +115,21 @@ Return format:
   "invoice_date": "YYYY-MM-DD or null",
   "total_amount": number or null,
   "currency": "EUR",
+  "total_ejecucion_material": number or null,
+  "a_deducir": number or null,
+  "total_certificacion": number or null,
   "items": [
     {
-      "description": "string",
-      "unit": "string or null",
-      "quantity": number or null,
-      "unit_price": number or null,
+      "description": "string (full chapter name, e.g. CAPÍTULO 1 - MOVIMIENTO DE TIERRAS)",
+      "unit": null,
+      "quantity": null,
+      "unit_price": null,
       "total_amount": number or null
     }
   ]
 }
 
-Spanish column names: Descripción/Concepto=description, Ud/Unidad=unit, Cantidad/Medición=quantity, Precio/P.U.=unit_price, Importe/Total=total_amount.
+Spanish terms: CAPÍTULO=chapter, TOTAL EJECUCIÓN MATERIAL=total_ejecucion_material, A deducir certificación anterior=a_deducir, TOTAL CERTIFICACIÓN=total_certificacion, Retención/Garantía=retention deduction.
 Return ONLY the raw JSON object starting with {, no code blocks, no explanation.`
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -173,14 +182,17 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
     const { data: invoice, error: invoiceError } = await supabase
       .from('invoices')
       .insert({
-        project_id:     projectId,
-        invoice_number: invoiceData.invoice_number ?? '9999',
-        supplier:       invoiceData.supplier       ?? null,
-        invoice_date:   invoiceData.invoice_date   ?? null,
-        total_amount:   invoiceData.total_amount   ?? null,
-        currency:       invoiceData.currency       ?? 'EUR',
-        file_name:      file.name,
-        status:         'processed',
+        project_id:               projectId,
+        invoice_number:           invoiceData.invoice_number           ?? '9999',
+        supplier:                 invoiceData.supplier                 ?? null,
+        invoice_date:             invoiceData.invoice_date             ?? null,
+        total_amount:             invoiceData.total_amount             ?? null,
+        currency:                 invoiceData.currency                 ?? 'EUR',
+        total_ejecucion_material: invoiceData.total_ejecucion_material ?? null,
+        a_deducir:                invoiceData.a_deducir                ?? null,
+        total_certificacion:      invoiceData.total_certificacion      ?? null,
+        file_name:                file.name,
+        status:                   'processed',
       })
       .select('id')
       .single()

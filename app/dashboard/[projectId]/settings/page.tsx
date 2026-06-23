@@ -11,6 +11,7 @@ export default function SettingsPage() {
   const [boqMsg, setBoqMsg] = useState('')
 
   const [threshold, setThreshold] = useState(90)
+  const [retentionPct, setRetentionPct] = useState(10)
   const [emailsRaw, setEmailsRaw] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
@@ -20,9 +21,10 @@ export default function SettingsPage() {
   const load = useCallback(async () => {
     const res = await fetch('/api/projects')
     const data = await res.json()
-    const project = (data.projects ?? []).find((p: { id: string; alert_threshold_pct?: number; email_recipients?: string[]; boq_file_name?: string }) => p.id === projectId)
+    const project = (data.projects ?? []).find((p: { id: string; alert_threshold_pct?: number; retention_pct?: number; email_recipients?: string[]; boq_file_name?: string }) => p.id === projectId)
     if (project) {
       setThreshold(project.alert_threshold_pct ?? 90)
+      setRetentionPct(project.retention_pct ?? 10)
       setEmailsRaw((project.email_recipients ?? []).join(', '))
       setBoqFileName(project.boq_file_name ?? null)
     }
@@ -52,7 +54,7 @@ export default function SettingsPage() {
     const res = await fetch(`/api/projects/${projectId}/settings`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ alert_threshold_pct: threshold, email_recipients: emails }),
+      body: JSON.stringify({ alert_threshold_pct: threshold, retention_pct: retentionPct, email_recipients: emails }),
     })
     const data = await res.json()
     setSaving(false)
@@ -89,6 +91,17 @@ export default function SettingsPage() {
       <div className="bg-white border border-gray-200 rounded-xl p-6">
         <h2 className="text-base font-semibold text-gray-900 mb-4">Alert Settings</h2>
         <div className="space-y-5">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Retention (garantía): <span className="text-blue-600 font-bold">{retentionPct}%</span>
+            </label>
+            <input
+              type="range" min={0} max={20} step={0.5} value={retentionPct}
+              onChange={e => setRetentionPct(Number(e.target.value))}
+              className="w-full"
+            />
+            <p className="text-xs text-gray-400 mt-1">Deducted from each certificación total to get the net payable amount</p>
+          </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Alert threshold: <span className="text-blue-600 font-bold">{threshold}%</span>

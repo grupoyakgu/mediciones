@@ -13,6 +13,9 @@ interface Invoice {
   file_name: string | null
   status: string
   created_at: string
+  total_ejecucion_material: number | null
+  a_deducir: number | null
+  total_certificacion: number | null
 }
 
 interface InvoiceItem {
@@ -58,8 +61,15 @@ export default function InvoicesPage() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<Invoice | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [retentionPct, setRetentionPct] = useState(10)
 
-  useEffect(() => { loadInvoices() }, []) // eslint-disable-line
+  useEffect(() => {
+    loadInvoices()
+    fetch('/api/projects').then(r => r.json()).then(d => {
+      const p = (d.projects ?? []).find((x: { id: string; retention_pct?: number }) => x.id === projectId)
+      if (p?.retention_pct != null) setRetentionPct(p.retention_pct)
+    })
+  }, []) // eslint-disable-line
 
   async function loadInvoices() {
     const { data } = await supabase
@@ -339,14 +349,51 @@ export default function InvoicesPage() {
       </div>
 
       {/* Detail panel */}
-      {selectedId && (
+      {selectedId && (() => {
+        const inv = invoices.find(i => i.id === selectedId)!
+        const retention = inv?.total_certificacion != null
+          ? inv.total_certificacion
+          : inv?.total_amount != null
+            ? inv.total_amount * (1 - retentionPct / 100)
+            : null
+        return (
         <div style={card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <div style={{ fontWeight: 600, fontSize: '.9rem', color: '#0f172a' }}>
               Invoice Line Items
             </div>
-            <div style={{ fontSize: '.8rem', color: '#94a3b8' }}>{detailItems.length} items</div>
+            <div style={{ fontSize: '.8rem', color: '#94a3b8' }}>{detailItems.length} chapters</div>
           </div>
+
+          {/* Financial summary */}
+          {inv && (inv.total_ejecucion_material != null || inv.a_deducir != null || inv.total_amount != null) && (
+            <div style={{ background: '#f8fafc', borderRadius: '8px', padding: '1rem 1.25rem', marginBottom: '1.25rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '.75rem 1.5rem' }}>
+              {inv.total_ejecucion_material != null && (
+                <div>
+                  <div style={{ fontSize: '.7rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '.2rem' }}>Total Ejecución Material</div>
+                  <div style={{ fontWeight: 600, fontSize: '.95rem', color: '#0f172a' }}>{fmt(inv.total_ejecucion_material, inv.currency ?? 'EUR')}</div>
+                </div>
+              )}
+              {inv.a_deducir != null && (
+                <div>
+                  <div style={{ fontSize: '.7rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '.2rem' }}>A Deducir Certificación Anterior</div>
+                  <div style={{ fontWeight: 600, fontSize: '.95rem', color: '#dc2626' }}>− {fmt(inv.a_deducir, inv.currency ?? 'EUR')}</div>
+                </div>
+              )}
+              {inv.total_amount != null && (
+                <div>
+                  <div style={{ fontSize: '.7rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '.2rem' }}>Total Certificación Sin IVA</div>
+                  <div style={{ fontWeight: 600, fontSize: '.95rem', color: '#0f172a' }}>{fmt(inv.total_amount, inv.currency ?? 'EUR')}</div>
+                </div>
+              )}
+              {retention != null && (
+                <div style={{ borderLeft: '2px solid #2563eb', paddingLeft: '.75rem' }}>
+                  <div style={{ fontSize: '.7rem', color: '#2563eb', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '.2rem' }}>Total Certificación (−{retentionPct}% retención)</div>
+                  <div style={{ fontWeight: 700, fontSize: '1rem', color: '#2563eb' }}>{fmt(retention, inv.currency ?? 'EUR')}</div>
+                </div>
+              )}
+            </div>
+          )}
           {detailLoading ? (
             <div style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>Loading…</div>
           ) : detailItems.length === 0 ? (
@@ -401,7 +448,8 @@ export default function InvoicesPage() {
             </div>
           )}
         </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

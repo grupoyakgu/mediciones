@@ -28,6 +28,7 @@ export async function PATCH(
     .from('projects')
     .update({
       alert_threshold_pct: body.alert_threshold_pct,
+      retention_pct:       body.retention_pct,
       email_recipients:    body.email_recipients,
     })
     .eq('id', params.projectId)
