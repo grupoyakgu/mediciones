@@ -11,9 +11,9 @@ interface AlertItem {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  not_in_boq: 'Not in BOQ',
-  warning_quantity: 'Quantity Warning',
-  warning_price: 'Price Warning',
+  not_in_boq:       'Not in BOQ',
+  warning_quantity:  'Quantity Warning',
+  warning_price:     'Price Warning',
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -37,29 +37,36 @@ export default async function AlertsPage({ params }: { params: { projectId: stri
     }
   )
 
-  // Get all alert-level invoice items for this project
-  const { data: alerts } = await supabase
-    .from('invoice_items')
-    .select('id, description, match_status, match_notes, total_amount, invoices(invoice_number, supplier, invoice_date)')
-    .neq('match_status', 'ok')
-    .in(
-      'invoice_id',
-      supabase.from('invoices').select('id').eq('project_id', params.projectId)
-    )
-    .order('match_status')
+  const { data: invoices } = await supabase
+    .from('invoices')
+    .select('id')
+    .eq('project_id', params.projectId)
+
+  const invoiceIds = (invoices ?? []).map(i => i.id)
+
+  const alerts: AlertItem[] = []
+  if (invoiceIds.length) {
+    const { data } = await supabase
+      .from('invoice_items')
+      .select('id, description, match_status, match_notes, total_amount, invoices(invoice_number, supplier, invoice_date)')
+      .neq('match_status', 'ok')
+      .in('invoice_id', invoiceIds)
+      .order('match_status')
+    if (data) alerts.push(...(data as AlertItem[]))
+  }
 
   const groups = ['not_in_boq', 'warning_quantity', 'warning_price']
 
   return (
     <div className="space-y-6">
-      {(alerts as AlertItem[] | null)?.length === 0 && (
+      {alerts.length === 0 && (
         <div className="text-center py-20">
           <p className="text-4xl mb-3">✅</p>
           <p className="text-gray-500">No alerts — all invoice items matched to the BOQ.</p>
         </div>
       )}
       {groups.map(status => {
-        const items = (alerts as AlertItem[] | null)?.filter(a => a.match_status === status) ?? []
+        const items = alerts.filter(a => a.match_status === status)
         if (!items.length) return null
         return (
           <div key={status}>
