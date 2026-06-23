@@ -72,7 +72,7 @@ ${content.slice(0, 14000)}`
     return NextResponse.json({ error: `Claude API error: ${String(e)}` }, { status: 500 })
   }
 
-  let jsonText = claudeResponse.trim()
+  const jsonText = claudeResponse.trim()
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/, '')
     .trim()

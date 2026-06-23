@@ -86,7 +86,7 @@ ${content.slice(0, 14000)}`
     return NextResponse.json({ error: `Claude API error: ${String(e)}` }, { status: 500 })
   }
 
-  let jsonText = claudeResponse.trim()
+  const jsonText = claudeResponse.trim()
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/, '')
     .trim()
@@ -139,7 +139,7 @@ ${content.slice(0, 14000)}`
 
   function normalize(s: string): string {
     return s.toLowerCase()
-      .normalize('NFD').replace(/[̀-ͯ]/g, '')  // strip accents: é->e, ñ->n, etc.
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
       .replace(/[^a-z0-9]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
@@ -150,11 +150,9 @@ ${content.slice(0, 14000)}`
     const normDesc = normalize(desc)
     const normChapter = chapterRef ? normalize(chapterRef) : null
 
-    // Exact description match
     const hit = boq.find(b => normalize(b.description) === normDesc)
     if (hit) return hit
 
-    // Word overlap score
     const descWords = new Set(normDesc.split(' ').filter(w => w.length > 3))
     let best: typeof boq[0] | null = null
     let bestScore = 0
