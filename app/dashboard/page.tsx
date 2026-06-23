@@ -1,191 +1,284 @@
 'use client'
+import { useState, useEffect, useMemo } from 'react'
+import { createClient } from '@/lib/supabase/client'
 
-import { useState, useEffect, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
-
-interface Project {
+interface BoqItem {
   id: string
-  name: string
-  description?: string
-  currency: string
-  boq_file_name?: string
-  boq_uploaded_at?: string
-  created_at: string
+  chapter_id: string | null
+  chapter_name: string | null
+  item_code: string | null
+  description: string
+  unit: string | null
+  quantity: number | null
+  unit_price: number | null
+  total_amount: number | null
 }
 
-export default function ProjectsPage() {
-  const router = useRouter()
-  const [projects, setProjects] = useState<Project[]>([])
+type SortField = 'description' | 'unit_price' | 'total_amount' | 'chapter'
+type SortDir = 'asc' | 'desc'
+
+const fmt = (n: number | null) =>
+  n == null ? '—' : n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+export default function DashboardPage() {
+  const supabase = createClient()
+  const [items, setItems] = useState<BoqItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [showNew, setShowNew] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [newDesc, setNewDesc] = useState('')
-  const [newCurrency, setNewCurrency] = useState('EUR')
-  const [creating, setCreating] = useState(false)
-  const [error, setError] = useState('')
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    const res = await fetch('/api/projects')
-    const data = await res.json()
-    setProjects(data.projects ?? [])
-    setLoading(false)
-  }, [])
+  // Controls
+  const [search, setSearch] = useState('')
+  const [chapterFilter, setChapterFilter] = useState('all')
+  const [minPrice, setMinPrice] = useState('')
+  const [maxPrice, setMaxPrice] = useState('')
+  const [sortField, setSortField] = useState<SortField>('chapter')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [showSummary, setShowSummary] = useState(true)
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    supabase
+      .from('boq_items')
+      .select('*')
+      .then(({ data }) => {
+        setItems(data ?? [])
+        setLoading(false)
+      })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function createProject() {
-    if (!newName.trim()) return
-    setCreating(true)
-    setError('')
-    const res = await fetch('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: newName, description: newDesc, currency: newCurrency }),
+  const chapters = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const item of items) {
+      const key = item.chapter_id ?? ''
+      if (!seen.has(key)) seen.set(key, item.chapter_name ?? item.chapter_id ?? 'Uncategorised')
+    }
+    return Array.from(seen.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  }, [items])
+
+  const filtered = useMemo(() => {
+    let rows = items
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      rows = rows.filter(
+        r =>
+          r.description.toLowerCase().includes(q) ||
+          (r.chapter_name ?? '').toLowerCase().includes(q) ||
+          (r.item_code ?? '').toLowerCase().includes(q)
+      )
+    }
+    if (chapterFilter !== 'all') {
+      rows = rows.filter(r => (r.chapter_id ?? '') === chapterFilter)
+    }
+    const min = parseFloat(minPrice)
+    const max = parseFloat(maxPrice)
+    if (!isNaN(min)) rows = rows.filter(r => (r.total_amount ?? 0) >= min)
+    if (!isNaN(max)) rows = rows.filter(r => (r.total_amount ?? 0) <= max)
+    return rows.slice().sort((a, b) => {
+      let cmp = 0
+      if (sortField === 'description') cmp = a.description.localeCompare(b.description)
+      else if (sortField === 'unit_price') cmp = (a.unit_price ?? 0) - (b.unit_price ?? 0)
+      else if (sortField === 'total_amount') cmp = (a.total_amount ?? 0) - (b.total_amount ?? 0)
+      else cmp = (a.chapter_id ?? '').localeCompare(b.chapter_id ?? '')
+      return sortDir === 'asc' ? cmp : -cmp
     })
-    const data = await res.json()
-    setCreating(false)
-    if (data.error) { setError(data.error); return }
-    setShowNew(false)
-    setNewName('')
-    setNewDesc('')
-    router.push(`/dashboard/${data.id}`)
+  }, [items, search, chapterFilter, minPrice, maxPrice, sortField, sortDir])
+
+  const chapterSummary = useMemo(() => {
+    const map = new Map<string, { name: string; count: number; total: number }>()
+    for (const item of filtered) {
+      const key = item.chapter_id ?? '__none__'
+      const name = item.chapter_name ?? item.chapter_id ?? 'Uncategorised'
+      const entry = map.get(key) ?? { name, count: 0, total: 0 }
+      entry.count++
+      entry.total += item.total_amount ?? 0
+      map.set(key, entry)
+    }
+    return Array.from(map.entries())
+      .map(([id, v]) => ({ id, ...v }))
+      .sort((a, b) => a.id.localeCompare(b.id))
+  }, [filtered])
+
+  const grandTotal = chapterSummary.reduce((s, c) => s + c.total, 0)
+
+  function toggleSort(field: SortField) {
+    if (sortField === field) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
+    else { setSortField(field); setSortDir('asc') }
   }
 
-  async function deleteProject(id: string, name: string) {
-    if (!confirm(`Delete "${name}" and all its data?`)) return
-    await fetch(`/api/projects?id=${id}`, { method: 'DELETE' })
-    load()
+  const sortArrow = (field: SortField) =>
+    sortField === field ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''
+
+  // Styles
+  const card: React.CSSProperties = { background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '1.5rem', marginBottom: '1.5rem' }
+  const inputSt: React.CSSProperties = { padding: '.45rem .75rem', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '.85rem', outline: 'none', background: 'white' }
+  const thSt = (clickable = false): React.CSSProperties => ({
+    padding: '.625rem 1rem', textAlign: 'left', fontSize: '.75rem', fontWeight: 600,
+    color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em',
+    background: '#f8fafc', borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap',
+    cursor: clickable ? 'pointer' : 'default', userSelect: 'none',
+  })
+  const tdSt = (right = false, muted = false): React.CSSProperties => ({
+    padding: '.55rem 1rem', fontSize: '.85rem', borderBottom: '1px solid #f1f5f9',
+    textAlign: right ? 'right' : 'left', color: muted ? '#94a3b8' : '#1e293b',
+    whiteSpace: right ? 'nowrap' : 'normal',
+  })
+
+  if (loading) {
+    return (
+      <div>
+        <h1 style={{ margin: '0 0 1.5rem', fontSize: '1.5rem', fontWeight: 700, color: '#0f172a' }}>Overview</h1>
+        <div style={{ ...card, textAlign: 'center', padding: '4rem', color: '#94a3b8' }}>Loading BOQ data…</div>
+      </div>
+    )
+  }
+
+  if (items.length === 0) {
+    return (
+      <div>
+        <h1 style={{ margin: '0 0 1.5rem', fontSize: '1.5rem', fontWeight: 700, color: '#0f172a' }}>Overview</h1>
+        <div style={{ ...card, textAlign: 'center', padding: '4rem 2rem', color: '#94a3b8', border: '2px dashed #e2e8f0' }}>
+          <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>📂</div>
+          <p style={{ margin: 0 }}>No BOQ loaded. Go to <a href="/dashboard/settings" style={{ color: '#2563eb', fontWeight: 500 }}>Settings</a> to upload your BOQ file.</p>
+        </div>
+      </div>
+    )
   }
 
   return (
     <div>
-      {/* Page header */}
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-xl font-semibold text-gray-900">Projects</h1>
-          <p className="text-sm text-gray-500 mt-0.5">{projects.length} project{projects.length !== 1 ? 's' : ''}</p>
+      <h1 style={{ margin: '0 0 .25rem', fontSize: '1.5rem', fontWeight: 700, color: '#0f172a' }}>Overview</h1>
+      <p style={{ margin: '0 0 1.5rem', color: '#64748b', fontSize: '.9rem' }}>{items.length} line items · {chapters.length} chapters</p>
+
+      {/* ── Filters ── */}
+      <div style={{ ...card, padding: '1rem 1.5rem' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.75rem', alignItems: 'center' }}>
+          <input
+            style={{ ...inputSt, minWidth: '220px', flex: 1 }}
+            placeholder="🔍  Search description, chapter or code…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <select style={{ ...inputSt }} value={chapterFilter} onChange={e => setChapterFilter(e.target.value)}>
+            <option value="all">All chapters</option>
+            {chapters.map(([id, name]) => (
+              <option key={id} value={id}>{id ? `${id} – ` : ''}{name}</option>
+            ))}
+          </select>
+          <input
+            style={{ ...inputSt, width: '110px' }}
+            placeholder="Min total (€)"
+            value={minPrice}
+            onChange={e => setMinPrice(e.target.value)}
+            type="number"
+          />
+          <input
+            style={{ ...inputSt, width: '110px' }}
+            placeholder="Max total (€)"
+            value={maxPrice}
+            onChange={e => setMaxPrice(e.target.value)}
+            type="number"
+          />
+          <label style={{ display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.875rem', color: '#475569', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            <input
+              type="checkbox"
+              checked={showSummary}
+              onChange={e => setShowSummary(e.target.checked)}
+              style={{ width: '15px', height: '15px', cursor: 'pointer' }}
+            />
+            Chapter summary
+          </label>
         </div>
-        <button
-          onClick={() => setShowNew(true)}
-          className="bg-black text-white px-4 py-2 rounded-lg hover:bg-gray-800 text-sm font-medium transition-colors"
-        >
-          + New Project
-        </button>
       </div>
 
-      {/* New project modal */}
-      {showNew && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md border border-gray-200">
-            <h2 className="text-base font-semibold mb-4">New Project</h2>
-            {error && <p className="text-red-500 text-sm mb-3">{error}</p>}
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1.5">Name *</label>
-                <input
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  placeholder="e.g. Edificio Calle Mayor"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
-                  autoFocus
-                  onKeyDown={e => e.key === 'Enter' && createProject()}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1.5">Description</label>
-                <textarea
-                  value={newDesc}
-                  onChange={e => setNewDesc(e.target.value)}
-                  rows={2}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black resize-none"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1.5">Currency</label>
-                <select
-                  value={newCurrency}
-                  onChange={e => setNewCurrency(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
-                >
-                  <option>EUR</option><option>USD</option><option>GBP</option>
-                </select>
-              </div>
-            </div>
-            <div className="flex gap-3 mt-6">
-              <button
-                onClick={createProject}
-                disabled={creating || !newName.trim()}
-                className="flex-1 bg-black text-white py-2 rounded-lg text-sm font-medium disabled:opacity-40 hover:bg-gray-800 transition-colors"
-              >
-                {creating ? 'Creating…' : 'Create'}
-              </button>
-              <button
-                onClick={() => { setShowNew(false); setError('') }}
-                className="flex-1 border border-gray-200 py-2 rounded-lg text-sm hover:bg-gray-50 transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
+      {/* ── Chapter Summary ── */}
+      {showSummary && (
+        <div style={card}>
+          <div style={{ fontWeight: 600, fontSize: '.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '1rem' }}>Chapter Summary</div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={thSt()}>Chapter</th>
+                  <th style={{ ...thSt(), textAlign: 'right' }}>Items</th>
+                  <th style={{ ...thSt(), textAlign: 'right' }}>Total Budget (€)</th>
+                  <th style={{ ...thSt(), textAlign: 'right' }}>% of Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {chapterSummary.map(ch => (
+                  <tr key={ch.id} style={{ cursor: 'pointer' }}
+                    onClick={() => setChapterFilter(chapterFilter === ch.id ? 'all' : ch.id)}>
+                    <td style={{ ...tdSt(), fontWeight: 500 }}>
+                      {chapterFilter === ch.id && <span style={{ color: '#2563eb', marginRight: '.4rem' }}>▶</span>}
+                      {ch.id ? `${ch.id} – ` : ''}{ch.name}
+                    </td>
+                    <td style={tdSt(true, true)}>{ch.count}</td>
+                    <td style={{ ...tdSt(true), fontWeight: 500 }}>{fmt(ch.total)}</td>
+                    <td style={tdSt(true, true)}>
+                      {grandTotal > 0 ? `${((ch.total / grandTotal) * 100).toFixed(1)}%` : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ background: '#f8fafc' }}>
+                  <td style={{ ...tdSt(), fontWeight: 700, borderTop: '2px solid #e2e8f0' }}>TOTAL</td>
+                  <td style={{ ...tdSt(true, true), borderTop: '2px solid #e2e8f0' }}>
+                    {chapterSummary.reduce((s, c) => s + c.count, 0)}
+                  </td>
+                  <td style={{ ...tdSt(true), fontWeight: 700, color: '#0f172a', borderTop: '2px solid #e2e8f0' }}>{fmt(grandTotal)}</td>
+                  <td style={{ ...tdSt(true, true), borderTop: '2px solid #e2e8f0' }}>100%</td>
+                </tr>
+              </tfoot>
+            </table>
           </div>
+          <p style={{ margin: '.75rem 0 0', fontSize: '.78rem', color: '#94a3b8' }}>Click a chapter row to filter the table below by that chapter.</p>
         </div>
       )}
 
-      {/* Project grid */}
-      {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[1,2,3].map(i => (
-            <div key={i} className="h-32 bg-gray-100 rounded-xl animate-pulse" />
-          ))}
+      {/* ── BOQ Table ── */}
+      <div style={card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <div style={{ fontWeight: 600, fontSize: '.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em' }}>BOQ Line Items</div>
+          <div style={{ fontSize: '.8rem', color: '#94a3b8' }}>{filtered.length} of {items.length} items</div>
         </div>
-      ) : projects.length === 0 ? (
-        <div className="text-center py-24 border-2 border-dashed border-gray-200 rounded-xl">
-          <p className="text-3xl mb-3">📁</p>
-          <p className="text-gray-600 font-medium">No projects yet</p>
-          <p className="text-gray-400 text-sm mt-1">Create your first project to get started</p>
-          <button
-            onClick={() => setShowNew(true)}
-            className="mt-4 bg-black text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors"
-          >
-            + New Project
-          </button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {projects.map(p => (
-            <div
-              key={p.id}
-              onClick={() => router.push(`/dashboard/${p.id}`)}
-              className="group bg-white border border-gray-200 rounded-xl p-5 hover:border-gray-400 hover:shadow-sm transition-all cursor-pointer"
-            >
-              <div className="flex items-start justify-between mb-3">
-                <div className="w-8 h-8 rounded-lg bg-gray-900 flex items-center justify-center text-white text-sm font-bold">
-                  {p.name.charAt(0).toUpperCase()}
-                </div>
-                <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium">{p.currency}</span>
-              </div>
-              <h2 className="font-semibold text-gray-900 truncate">{p.name}</h2>
-              {p.description && (
-                <p className="text-sm text-gray-400 mt-0.5 line-clamp-1">{p.description}</p>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '760px' }}>
+            <thead>
+              <tr>
+                <th style={thSt(true)} onClick={() => toggleSort('chapter')}>Chapter{sortArrow('chapter')}</th>
+                <th style={thSt()}>Code</th>
+                <th style={thSt(true)} onClick={() => toggleSort('description')}>Description{sortArrow('description')}</th>
+                <th style={thSt()}>Unit</th>
+                <th style={{ ...thSt(), textAlign: 'right' }}>Qty</th>
+                <th style={{ ...thSt(true), textAlign: 'right' }} onClick={() => toggleSort('unit_price')}>Unit Price{sortArrow('unit_price')}</th>
+                <th style={{ ...thSt(true), textAlign: 'right' }} onClick={() => toggleSort('total_amount')}>Total (€){sortArrow('total_amount')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={7} style={{ padding: '3rem', textAlign: 'center', color: '#94a3b8', fontSize: '.9rem' }}>No items match the current filters.</td>
+                </tr>
+              ) : (
+                filtered.map(item => (
+                  <tr key={item.id} style={{ transition: 'background .1s' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = '#f8fafc')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'white')}>
+                    <td style={{ ...tdSt(), color: '#64748b', fontSize: '.78rem', whiteSpace: 'nowrap' }}>
+                      {item.chapter_id ? <span style={{ background: '#eff6ff', color: '#1d4ed8', padding: '.15rem .45rem', borderRadius: '4px', fontWeight: 600 }}>{item.chapter_id}</span> : null}
+                    </td>
+                    <td style={{ ...tdSt(), color: '#64748b', fontSize: '.78rem', whiteSpace: 'nowrap' }}>{item.item_code ?? '—'}</td>
+                    <td style={tdSt()}>{item.description}</td>
+                    <td style={tdSt(false, true)}>{item.unit ?? '—'}</td>
+                    <td style={tdSt(true, true)}>{item.quantity != null ? item.quantity.toLocaleString('es-ES') : '—'}</td>
+                    <td style={tdSt(true)}>{fmt(item.unit_price)}</td>
+                    <td style={{ ...tdSt(true), fontWeight: item.total_amount ? 500 : 400 }}>{fmt(item.total_amount)}</td>
+                  </tr>
+                ))
               )}
-              <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
-                <span className="text-xs text-gray-400">
-                  {p.boq_file_name
-                    ? <span className="text-green-600">✓ BOQ uploaded</span>
-                    : <span className="text-amber-500">⚠ No BOQ</span>
-                  }
-                </span>
-                <button
-                  onClick={e => { e.stopPropagation(); deleteProject(p.id, p.name) }}
-                  className="text-xs text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          ))}
+            </tbody>
+          </table>
         </div>
-      )}
+      </div>
     </div>
   )
 }
