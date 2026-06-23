@@ -1,22 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { parseFile } from '@/lib/file-parser'
-import Anthropic from '@anthropic-ai/sdk'
+import { claudeCreate } from '@/lib/claude'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 const SETTINGS_ID = 'aaaaaaaa-0000-0000-0000-000000000001'
 
 function extractJsonArray(text: string): Record<string, unknown>[] | null {
   const start = text.indexOf('[')
   if (start === -1) return null
 
-  // 1. Try direct parse
   try {
     const parsed = JSON.parse(text)
     if (Array.isArray(parsed)) return parsed
   } catch { /* continue */ }
 
-  // 2. Slice from [ to last ] — handles trailing notes/text after the array
   const end = text.lastIndexOf(']')
   if (end > start) {
     try {
@@ -25,7 +22,6 @@ function extractJsonArray(text: string): Record<string, unknown>[] | null {
     } catch { /* continue */ }
   }
 
-  // 3. Truncation recovery — find last complete object and close the array
   const candidate = text.slice(start)
   const lastObj = candidate.lastIndexOf('},')
   const closeAt = lastObj !== -1 ? lastObj + 1 : candidate.lastIndexOf('}')
@@ -62,7 +58,7 @@ export async function POST(req: NextRequest) {
 
   let claudeResponse: string
   try {
-    const response = await anthropic.messages.create({
+    const response = await claudeCreate({
       model: 'claude-sonnet-4-6',
       max_tokens: 8192,
       messages: [{
