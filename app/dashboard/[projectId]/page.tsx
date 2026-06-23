@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import OverviewCharts from './OverviewCharts'
+import BoqTable from './BoqTable'
 
 function makeSupabase() {
   const cookieStore = cookies()
@@ -95,6 +96,9 @@ export default async function OverviewPage({ params }: { params: { projectId: st
 
       {/* Charts */}
       <OverviewCharts chapterData={chapterData} cumData={cumData} currency={currency} />
+
+      {/* BOQ Table */}
+      <BoqTable projectId={projectId} />
     </div>
   )
 }

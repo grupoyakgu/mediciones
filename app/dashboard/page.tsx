@@ -1,142 +1,59 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useRouter } from 'next/navigation'
 
-interface BoqItem {
+interface Project {
   id: string
-  chapter_id: string | null
-  chapter_name: string | null
-  item_code: string | null
-  description: string
-  unit: string | null
-  quantity: number | null
-  unit_price: number | null
-  total_amount: number | null
+  name: string
+  boq_file_name: string | null
+  boq_uploaded_at: string | null
+  created_at: string
 }
 
-type SortField = 'description' | 'unit_price' | 'total_amount' | 'chapter'
-type SortDir = 'asc' | 'desc'
-
-const fmt = (n: number | null) =>
-  n == null ? '—' : n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-
-export default function DashboardPage() {
+export default function AllProjectsPage() {
   const supabase = createClient()
-  const [items, setItems] = useState<BoqItem[]>([])
+  const router = useRouter()
+  const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [showNew, setShowNew] = useState(false)
 
-  // Controls
-  const [search, setSearch] = useState('')
-  const [chapterFilter, setChapterFilter] = useState('all')
-  const [minPrice, setMinPrice] = useState('')
-  const [maxPrice, setMaxPrice] = useState('')
-  const [sortField, setSortField] = useState<SortField>('chapter')
-  const [sortDir, setSortDir] = useState<SortDir>('asc')
-  const [showSummary, setShowSummary] = useState(true)
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    supabase
-      .from('boq_items')
-      .select('*')
-      .then(({ data }) => {
-        setItems(data ?? [])
-        setLoading(false)
-      })
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const chapters = useMemo(() => {
-    const seen = new Map<string, string>()
-    for (const item of items) {
-      const key = item.chapter_id ?? ''
-      if (!seen.has(key)) seen.set(key, item.chapter_name ?? item.chapter_id ?? 'Uncategorised')
-    }
-    return Array.from(seen.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-  }, [items])
-
-  const filtered = useMemo(() => {
-    let rows = items
-    if (search.trim()) {
-      const q = search.toLowerCase()
-      rows = rows.filter(
-        r =>
-          r.description.toLowerCase().includes(q) ||
-          (r.chapter_name ?? '').toLowerCase().includes(q) ||
-          (r.item_code ?? '').toLowerCase().includes(q)
-      )
-    }
-    if (chapterFilter !== 'all') {
-      rows = rows.filter(r => (r.chapter_id ?? '') === chapterFilter)
-    }
-    const min = parseFloat(minPrice)
-    const max = parseFloat(maxPrice)
-    if (!isNaN(min)) rows = rows.filter(r => (r.total_amount ?? 0) >= min)
-    if (!isNaN(max)) rows = rows.filter(r => (r.total_amount ?? 0) <= max)
-    return rows.slice().sort((a, b) => {
-      let cmp = 0
-      if (sortField === 'description') cmp = a.description.localeCompare(b.description)
-      else if (sortField === 'unit_price') cmp = (a.unit_price ?? 0) - (b.unit_price ?? 0)
-      else if (sortField === 'total_amount') cmp = (a.total_amount ?? 0) - (b.total_amount ?? 0)
-      else cmp = (a.chapter_id ?? '').localeCompare(b.chapter_id ?? '')
-      return sortDir === 'asc' ? cmp : -cmp
-    })
-  }, [items, search, chapterFilter, minPrice, maxPrice, sortField, sortDir])
-
-  const chapterSummary = useMemo(() => {
-    const map = new Map<string, { name: string; count: number; total: number }>()
-    for (const item of filtered) {
-      const key = item.chapter_id ?? '__none__'
-      const name = item.chapter_name ?? item.chapter_id ?? 'Uncategorised'
-      const entry = map.get(key) ?? { name, count: 0, total: 0 }
-      entry.count++
-      entry.total += item.total_amount ?? 0
-      map.set(key, entry)
-    }
-    return Array.from(map.entries())
-      .map(([id, v]) => ({ id, ...v }))
-      .sort((a, b) => a.id.localeCompare(b.id))
-  }, [filtered])
-
-  const grandTotal = chapterSummary.reduce((s, c) => s + c.total, 0)
-
-  function toggleSort(field: SortField) {
-    if (sortField === field) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
-    else { setSortField(field); setSortDir('asc') }
+  async function load() {
+    const { data } = await supabase.from('projects').select('id, name, boq_file_name, boq_uploaded_at, created_at').order('created_at', { ascending: false })
+    setProjects(data ?? [])
+    setLoading(false)
   }
 
-  const sortArrow = (field: SortField) =>
-    sortField === field ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''
+  async function createProject() {
+    const name = newName.trim()
+    if (!name) return
+    setCreating(true)
+    const { data, error } = await supabase.from('projects').insert({ name }).select('id').single()
+    setCreating(false)
+    if (!error && data) {
+      setNewName('')
+      setShowNew(false)
+      router.push(`/dashboard/${data.id}`)
+    }
+  }
 
-  // Styles
-  const card: React.CSSProperties = { background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '1.5rem', marginBottom: '1.5rem' }
-  const inputSt: React.CSSProperties = { padding: '.45rem .75rem', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '.85rem', outline: 'none', background: 'white' }
-  const thSt = (clickable = false): React.CSSProperties => ({
-    padding: '.625rem 1rem', textAlign: 'left', fontSize: '.75rem', fontWeight: 600,
-    color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em',
-    background: '#f8fafc', borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap',
-    cursor: clickable ? 'pointer' : 'default', userSelect: 'none',
-  })
-  const tdSt = (right = false, muted = false): React.CSSProperties => ({
-    padding: '.55rem 1rem', fontSize: '.85rem', borderBottom: '1px solid #f1f5f9',
-    textAlign: right ? 'right' : 'left', color: muted ? '#94a3b8' : '#1e293b',
-    whiteSpace: right ? 'nowrap' : 'normal',
-  })
+  const card: React.CSSProperties = { background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '1.5rem', cursor: 'pointer', transition: 'box-shadow .15s' }
 
   if (loading) {
     return (
       <div>
-        <h1 style={{ margin: '0 0 1.5rem', fontSize: '1.5rem', fontWeight: 700, color: '#0f172a' }}>Overview</h1>
-        <div style={{ ...card, textAlign: 'center', padding: '4rem', color: '#94a3b8' }}>Loading BOQ data…</div>
-      </div>
-    )
-  }
-
-  if (items.length === 0) {
-    return (
-      <div>
-        <h1 style={{ margin: '0 0 1.5rem', fontSize: '1.5rem', fontWeight: 700, color: '#0f172a' }}>Overview</h1>
-        <div style={{ ...card, textAlign: 'center', padding: '4rem 2rem', color: '#94a3b8', border: '2px dashed #e2e8f0' }}>
-          <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>📂</div>
-          <p style={{ margin: 0 }}>No BOQ loaded. Go to <a href="/dashboard/settings" style={{ color: '#2563eb', fontWeight: 500 }}>Settings</a> to upload your BOQ file.</p>
+        <h1 style={{ margin: '0 0 1.5rem', fontSize: '1.5rem', fontWeight: 700, color: '#0f172a' }}>All Projects</h1>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+          {[1,2,3].map(i => (
+            <div key={i} style={{ ...card, cursor: 'default', background: '#f8fafc', animation: 'pulse 1.5s infinite' }}>
+              <div style={{ height: '1rem', background: '#e2e8f0', borderRadius: '4px', marginBottom: '.75rem', width: '60%' }} />
+              <div style={{ height: '.75rem', background: '#e2e8f0', borderRadius: '4px', width: '40%' }} />
+            </div>
+          ))}
         </div>
       </div>
     )
@@ -144,141 +61,75 @@ export default function DashboardPage() {
 
   return (
     <div>
-      <h1 style={{ margin: '0 0 .25rem', fontSize: '1.5rem', fontWeight: 700, color: '#0f172a' }}>Overview</h1>
-      <p style={{ margin: '0 0 1.5rem', color: '#64748b', fontSize: '.9rem' }}>{items.length} line items · {chapters.length} chapters</p>
-
-      {/* ── Filters ── */}
-      <div style={{ ...card, padding: '1rem 1.5rem' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.75rem', alignItems: 'center' }}>
-          <input
-            style={{ ...inputSt, minWidth: '220px', flex: 1 }}
-            placeholder="🔍  Search description, chapter or code…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
-          <select style={{ ...inputSt }} value={chapterFilter} onChange={e => setChapterFilter(e.target.value)}>
-            <option value="all">All chapters</option>
-            {chapters.map(([id, name]) => (
-              <option key={id} value={id}>{id ? `${id} – ` : ''}{name}</option>
-            ))}
-          </select>
-          <input
-            style={{ ...inputSt, width: '110px' }}
-            placeholder="Min total (€)"
-            value={minPrice}
-            onChange={e => setMinPrice(e.target.value)}
-            type="number"
-          />
-          <input
-            style={{ ...inputSt, width: '110px' }}
-            placeholder="Max total (€)"
-            value={maxPrice}
-            onChange={e => setMaxPrice(e.target.value)}
-            type="number"
-          />
-          <label style={{ display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.875rem', color: '#475569', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-            <input
-              type="checkbox"
-              checked={showSummary}
-              onChange={e => setShowSummary(e.target.checked)}
-              style={{ width: '15px', height: '15px', cursor: 'pointer' }}
-            />
-            Chapter summary
-          </label>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 700, color: '#0f172a' }}>All Projects</h1>
+          <p style={{ margin: '.25rem 0 0', color: '#64748b', fontSize: '.875rem' }}>{projects.length} project{projects.length !== 1 ? 's' : ''}</p>
         </div>
+        <button
+          onClick={() => setShowNew(s => !s)}
+          style={{ padding: '.5rem 1.25rem', background: '#0f172a', color: 'white', border: 'none', borderRadius: '8px', fontSize: '.875rem', fontWeight: 500, cursor: 'pointer' }}
+        >
+          + New Project
+        </button>
       </div>
 
-      {/* ── Chapter Summary ── */}
-      {showSummary && (
-        <div style={card}>
-          <div style={{ fontWeight: 600, fontSize: '.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '1rem' }}>Chapter Summary</div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={thSt()}>Chapter</th>
-                  <th style={{ ...thSt(), textAlign: 'right' }}>Items</th>
-                  <th style={{ ...thSt(), textAlign: 'right' }}>Total Budget (€)</th>
-                  <th style={{ ...thSt(), textAlign: 'right' }}>% of Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {chapterSummary.map(ch => (
-                  <tr key={ch.id} style={{ cursor: 'pointer' }}
-                    onClick={() => setChapterFilter(chapterFilter === ch.id ? 'all' : ch.id)}>
-                    <td style={{ ...tdSt(), fontWeight: 500 }}>
-                      {chapterFilter === ch.id && <span style={{ color: '#2563eb', marginRight: '.4rem' }}>▶</span>}
-                      {ch.id ? `${ch.id} – ` : ''}{ch.name}
-                    </td>
-                    <td style={tdSt(true, true)}>{ch.count}</td>
-                    <td style={{ ...tdSt(true), fontWeight: 500 }}>{fmt(ch.total)}</td>
-                    <td style={tdSt(true, true)}>
-                      {grandTotal > 0 ? `${((ch.total / grandTotal) * 100).toFixed(1)}%` : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr style={{ background: '#f8fafc' }}>
-                  <td style={{ ...tdSt(), fontWeight: 700, borderTop: '2px solid #e2e8f0' }}>TOTAL</td>
-                  <td style={{ ...tdSt(true, true), borderTop: '2px solid #e2e8f0' }}>
-                    {chapterSummary.reduce((s, c) => s + c.count, 0)}
-                  </td>
-                  <td style={{ ...tdSt(true), fontWeight: 700, color: '#0f172a', borderTop: '2px solid #e2e8f0' }}>{fmt(grandTotal)}</td>
-                  <td style={{ ...tdSt(true, true), borderTop: '2px solid #e2e8f0' }}>100%</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-          <p style={{ margin: '.75rem 0 0', fontSize: '.78rem', color: '#94a3b8' }}>Click a chapter row to filter the table below by that chapter.</p>
+      {showNew && (
+        <div style={{ background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '1.25rem', marginBottom: '1.25rem', display: 'flex', gap: '.75rem' }}>
+          <input
+            autoFocus
+            style={{ flex: 1, padding: '.5rem .75rem', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '.9rem', outline: 'none' }}
+            placeholder="Project name…"
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && createProject()}
+          />
+          <button
+            onClick={createProject}
+            disabled={creating || !newName.trim()}
+            style={{ padding: '.5rem 1rem', background: creating ? '#94a3b8' : '#2563eb', color: 'white', border: 'none', borderRadius: '6px', fontSize: '.875rem', fontWeight: 500, cursor: creating ? 'not-allowed' : 'pointer' }}
+          >
+            {creating ? 'Creating…' : 'Create'}
+          </button>
+          <button onClick={() => setShowNew(false)} style={{ padding: '.5rem .75rem', background: 'none', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '.875rem', cursor: 'pointer', color: '#64748b' }}>Cancel</button>
         </div>
       )}
 
-      {/* ── BOQ Table ── */}
-      <div style={card}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <div style={{ fontWeight: 600, fontSize: '.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em' }}>BOQ Line Items</div>
-          <div style={{ fontSize: '.8rem', color: '#94a3b8' }}>{filtered.length} of {items.length} items</div>
+      {projects.length === 0 ? (
+        <div style={{ background: 'white', borderRadius: '12px', border: '2px dashed #e2e8f0', padding: '4rem 2rem', textAlign: 'center', color: '#94a3b8' }}>
+          <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>📂</div>
+          <p style={{ margin: 0 }}>No projects yet. Click <strong>+ New Project</strong> to get started.</p>
         </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '760px' }}>
-            <thead>
-              <tr>
-                <th style={thSt(true)} onClick={() => toggleSort('chapter')}>Chapter{sortArrow('chapter')}</th>
-                <th style={thSt()}>Code</th>
-                <th style={thSt(true)} onClick={() => toggleSort('description')}>Description{sortArrow('description')}</th>
-                <th style={thSt()}>Unit</th>
-                <th style={{ ...thSt(), textAlign: 'right' }}>Qty</th>
-                <th style={{ ...thSt(true), textAlign: 'right' }} onClick={() => toggleSort('unit_price')}>Unit Price{sortArrow('unit_price')}</th>
-                <th style={{ ...thSt(true), textAlign: 'right' }} onClick={() => toggleSort('total_amount')}>Total (€){sortArrow('total_amount')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={7} style={{ padding: '3rem', textAlign: 'center', color: '#94a3b8', fontSize: '.9rem' }}>No items match the current filters.</td>
-                </tr>
-              ) : (
-                filtered.map(item => (
-                  <tr key={item.id} style={{ transition: 'background .1s' }}
-                    onMouseEnter={e => (e.currentTarget.style.background = '#f8fafc')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'white')}>
-                    <td style={{ ...tdSt(), color: '#64748b', fontSize: '.78rem', whiteSpace: 'nowrap' }}>
-                      {item.chapter_id ? <span style={{ background: '#eff6ff', color: '#1d4ed8', padding: '.15rem .45rem', borderRadius: '4px', fontWeight: 600 }}>{item.chapter_id}</span> : null}
-                    </td>
-                    <td style={{ ...tdSt(), color: '#64748b', fontSize: '.78rem', whiteSpace: 'nowrap' }}>{item.item_code ?? '—'}</td>
-                    <td style={tdSt()}>{item.description}</td>
-                    <td style={tdSt(false, true)}>{item.unit ?? '—'}</td>
-                    <td style={tdSt(true, true)}>{item.quantity != null ? item.quantity.toLocaleString('es-ES') : '—'}</td>
-                    <td style={tdSt(true)}>{fmt(item.unit_price)}</td>
-                    <td style={{ ...tdSt(true), fontWeight: item.total_amount ? 500 : 400 }}>{fmt(item.total_amount)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+          {projects.map(p => (
+            <div
+              key={p.id}
+              style={card}
+              onClick={() => router.push(`/dashboard/${p.id}`)}
+              onMouseEnter={e => (e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,.08)')}
+              onMouseLeave={e => (e.currentTarget.style.boxShadow = 'none')}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem', marginBottom: '.75rem' }}>
+                <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem', fontWeight: 700, color: '#2563eb', flexShrink: 0 }}>
+                  {p.name.charAt(0).toUpperCase()}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, color: '#0f172a', fontSize: '.95rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
+                  <div style={{ fontSize: '.75rem', color: '#94a3b8', marginTop: '.1rem' }}>
+                    Created {new Date(p.created_at).toLocaleDateString()}
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: '.8rem', color: p.boq_file_name ? '#15803d' : '#94a3b8' }}>
+                {p.boq_file_name
+                  ? `✅ BOQ: ${p.boq_file_name}`
+                  : '⬜ No BOQ uploaded yet'}
+              </div>
+            </div>
+          ))}
         </div>
-      </div>
+      )}
     </div>
   )
 }
