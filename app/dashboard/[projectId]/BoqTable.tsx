@@ -30,12 +30,11 @@ function topLevel(chapterId: string | null): string {
   return chapterId.split('.')[0]
 }
 
-const PAGE = 2000 // fetch rows in batches to bypass the 1000-row default limit
-
 export default function BoqTable({ projectId }: { projectId: string }) {
   const supabase = createClient()
   const [items, setItems] = useState<BoqItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [totalCount, setTotalCount] = useState(0)
 
   const [search, setSearch] = useState('')
   const [chapterFilter, setChapterFilter] = useState('all')
@@ -49,25 +48,29 @@ export default function BoqTable({ projectId }: { projectId: string }) {
     let cancelled = false
 
     async function fetchAll() {
-      const all: BoqItem[] = []
-      let from = 0
+      // First get the total count so we know how many rows to expect
+      const { count } = await supabase
+        .from('boq_items')
+        .select('*', { count: 'exact', head: true })
+        .eq('project_id', projectId)
 
-      while (true) {
-        const { data, error } = await supabase
-          .from('boq_items')
-          .select('*')
-          .eq('project_id', projectId)
-          .order('chapter_id', { ascending: true })
-          .range(from, from + PAGE - 1)
-
-        if (error || !data || data.length === 0) break
-        all.push(...(data as BoqItem[]))
-        if (data.length < PAGE) break // last page
-        from += PAGE
+      const total = count ?? 0
+      if (!cancelled) setTotalCount(total)
+      if (total === 0) {
+        if (!cancelled) setLoading(false)
+        return
       }
 
+      // Fetch all rows in one shot using the known total as the limit
+      const { data, error } = await supabase
+        .from('boq_items')
+        .select('*')
+        .eq('project_id', projectId)
+        .order('chapter_id', { ascending: true })
+        .limit(Math.max(total, 100))
+
       if (!cancelled) {
-        setItems(all)
+        if (!error && data) setItems(data as BoqItem[])
         setLoading(false)
       }
     }
@@ -163,7 +166,11 @@ export default function BoqTable({ projectId }: { projectId: string }) {
   })
 
   if (loading) {
-    return <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0' }}>Loading BOQ…</div>
+    return (
+      <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+        Loading BOQ{totalCount > 0 ? ` (${totalCount} items)…` : '…'}
+      </div>
+    )
   }
 
   if (items.length === 0) {
