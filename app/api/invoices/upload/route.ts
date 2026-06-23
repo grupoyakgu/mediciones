@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
-import { isSupportedFile, parseFileContent } from '@/lib/file-parser'
+import { isSupportedFile, parseFile } from '@/lib/file-parser'
 import { claudeCreate } from '@/lib/claude'
 
 interface InvoiceItem {
@@ -49,12 +49,12 @@ export async function POST(req: NextRequest) {
 
     if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
     if (!projectId) return NextResponse.json({ error: 'No projectId provided' }, { status: 400 })
-    if (!isSupportedFile(file.name)) {
+    if (!isSupportedFile(file.type, file.name)) {
       return NextResponse.json({ error: 'Unsupported file type. Please upload PDF, CSV, or Excel.' }, { status: 400 })
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    const content = await parseFileContent(buffer, file.name)
+    const content = await parseFile(buffer, file.type, file.name)
 
     const message = await claudeCreate({
       model: 'claude-sonnet-4-6',
@@ -112,7 +112,6 @@ ${content}`
       }
     )
 
-    // Load BOQ items for this project for matching
     const { data: boqItems } = await supabase
       .from('boq_items')
       .select('id, description, chapter_name, item_code')
@@ -138,7 +137,6 @@ ${content}`
       return { id: bestItem.id, status: 'ok', notes: `Matched with score ${bestScore.toFixed(2)}` }
     }
 
-    // Insert invoice
     const { data: invoice, error: invoiceError } = await supabase
       .from('invoices')
       .insert({
@@ -155,27 +153,18 @@ ${content}`
       .single()
     if (invoiceError) throw invoiceError
 
-    // Insert invoice items with BOQ matching
     const itemRows = invoiceData.items.map((item) => {
       const match = findBoqMatch(item.description ?? '')
-      let matchStatus = 'not_in_boq'
-      let matchNotes = 'No BOQ match found'
-      let boqItemId: string | null = null
-      if (match) {
-        boqItemId = match.id
-        matchStatus = 'ok'
-        matchNotes = match.notes
-      }
       return {
         invoice_id:   invoice.id,
-        boq_item_id:  boqItemId,
+        boq_item_id:  match?.id ?? null,
         description:  item.description  ?? '',
         unit:         item.unit         ?? null,
         quantity:     item.quantity     ?? null,
         unit_price:   item.unit_price   ?? null,
         total_amount: item.total_amount ?? null,
-        match_status: matchStatus,
-        match_notes:  matchNotes,
+        match_status: match ? 'ok' : 'not_in_boq',
+        match_notes:  match ? match.notes : 'No BOQ match found',
       }
     })
 

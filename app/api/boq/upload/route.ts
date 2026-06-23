@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
-import { isSupportedFile, parseFileContent } from '@/lib/file-parser'
+import { isSupportedFile, parseFile } from '@/lib/file-parser'
 import { claudeCreate } from '@/lib/claude'
 
 function extractJsonArray(text: string): Record<string, unknown>[] | null {
@@ -38,12 +38,12 @@ export async function POST(req: NextRequest) {
 
     if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
     if (!projectId) return NextResponse.json({ error: 'No projectId provided' }, { status: 400 })
-    if (!isSupportedFile(file.name)) {
+    if (!isSupportedFile(file.type, file.name)) {
       return NextResponse.json({ error: 'Unsupported file type. Please upload PDF, CSV, or Excel.' }, { status: 400 })
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    const content = await parseFileContent(buffer, file.name)
+    const content = await parseFile(buffer, file.type, file.name)
 
     const message = await claudeCreate({
       model: 'claude-sonnet-4-6',
@@ -96,16 +96,14 @@ ${content}`
       }
     )
 
-    // Delete old BOQ items for this project
     const { error: deleteError } = await supabase
       .from('boq_items')
       .delete()
       .eq('project_id', projectId)
     if (deleteError) throw deleteError
 
-    // Insert new items
     const rows = items.map((item) => ({
-      project_id: projectId,
+      project_id:   projectId,
       chapter_id:   String(item.chapter_id   ?? ''),
       chapter_name: String(item.chapter_name ?? ''),
       item_code:    String(item.item_code    ?? ''),
@@ -119,7 +117,6 @@ ${content}`
     const { error: insertError } = await supabase.from('boq_items').insert(rows)
     if (insertError) throw insertError
 
-    // Update project metadata
     const { error: updateError } = await supabase
       .from('projects')
       .update({ boq_file_name: file.name, boq_uploaded_at: new Date().toISOString() })
