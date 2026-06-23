@@ -160,7 +160,6 @@ ${content}`
         supplier:       invoiceData.supplier       ?? null,
         invoice_date:   invoiceData.invoice_date   ?? null,
         total_amount:   invoiceData.total_amount   ?? null,
-        currency:       invoiceData.currency       ?? 'EUR',
         file_name:      file.name,
         status:         'processed',
       })
