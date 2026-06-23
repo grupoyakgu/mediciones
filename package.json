@@ -10,16 +10,13 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",
-    "@supabase/ssr": "^0.5.2",
-    "@supabase/supabase-js": "^2.49.4",
+    "@supabase/ssr": "^0.12.0",
+    "@supabase/supabase-js": "^2.108.2",
     "@types/node-telegram-bot-api": "^0.64.15",
     "next": "14.2.35",
     "node-telegram-bot-api": "^1.1.0",
     "react": "^18",
     "react-dom": "^18",
-    "recharts": "^2.15.3",
-    "resend": "^4.5.2",
-    "unpdf": "^0.12.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
