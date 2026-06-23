@@ -1,7 +1,7 @@
 import * as XLSX from "xlsx";
 
 const SUPPORTED_EXTENSIONS = ["pdf", "csv", "xlsx", "xls"];
-const MAX_CONTENT_CHARS = 40000;
+const MAX_CONTENT_CHARS = 15000;
 
 export function isSupportedFile(_mimeType: string, fileName: string): boolean {
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
@@ -26,9 +26,8 @@ export async function parseFile(buffer: Buffer, mimeType: string, fileName: stri
     return buffer.toString("utf-8").trim().slice(0, MAX_CONTENT_CHARS);
   }
 
-  // PDF — try unpdf first, fall back to raw text extraction
+  // PDF — fast extraction first, unpdf fallback for compressed/signed PDFs
   if (ext === "pdf" || mimeType === "application/pdf") {
-    // First try: raw latin1 text extraction (fast, works for uncompressed PDFs)
     const raw = buffer.toString("latin1");
     const fastChunks: string[] = [];
     const fastRegex = /BT[\s\S]*?ET/g;
@@ -41,7 +40,6 @@ export async function parseFile(buffer: Buffer, mimeType: string, fileName: stri
     const fastText = fastChunks.join(" ").replace(/\\n/g, "\n").replace(/\\/g, "").trim();
     if (fastText.length > 100) return fastText.slice(0, MAX_CONTENT_CHARS);
 
-    // Second try: unpdf (PDF.js — handles compressed/signed PDFs)
     try {
       const { extractText } = await import("unpdf");
       const { text } = await extractText(new Uint8Array(buffer), { mergePages: true });
