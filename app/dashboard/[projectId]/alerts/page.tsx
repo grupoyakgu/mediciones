@@ -44,7 +44,7 @@ export default async function AlertsPage({ params }: { params: { projectId: stri
 
   const invoiceIds = (invoices ?? []).map(i => i.id)
 
-  const alerts: AlertItem[] = []
+  let alerts: AlertItem[] = []
   if (invoiceIds.length) {
     const { data } = await supabase
       .from('invoice_items')
@@ -52,7 +52,7 @@ export default async function AlertsPage({ params }: { params: { projectId: stri
       .neq('match_status', 'ok')
       .in('invoice_id', invoiceIds)
       .order('match_status')
-    if (data) alerts.push(...(data as AlertItem[]))
+    if (data) alerts = data as unknown as AlertItem[]
   }
 
   const groups = ['not_in_boq', 'warning_quantity', 'warning_price']
