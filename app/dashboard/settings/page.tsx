@@ -43,8 +43,8 @@ export default function SettingsPage() {
       } else {
         setMessage({ type: 'err', text: data.error ?? 'Upload failed' })
       }
-    } catch {
-      setMessage({ type: 'err', text: 'Upload failed — please try again' })
+    } catch (e) {
+      setMessage({ type: 'err', text: `Upload failed: ${String(e)}` })
     }
     setUploading(false)
     if (fileRef.current) fileRef.current.value = ''
@@ -68,9 +68,9 @@ export default function SettingsPage() {
   }
 
   const card: React.CSSProperties = { background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '1.5rem', marginBottom: '1.5rem' }
-  const label: React.CSSProperties = { display: 'block', fontSize: '.8rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '.75rem' }
-  const input: React.CSSProperties = { padding: '.5rem .75rem', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '.9rem', outline: 'none', width: '100%', boxSizing: 'border-box' }
-  const btn = (color = '#2563eb'): React.CSSProperties => ({ padding: '.5rem 1rem', background: color, color: 'white', border: 'none', borderRadius: '6px', fontSize: '.875rem', fontWeight: 500, cursor: 'pointer' })
+  const labelStyle: React.CSSProperties = { display: 'block', fontSize: '.8rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '.75rem' }
+  const inputStyle: React.CSSProperties = { padding: '.5rem .75rem', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '.9rem', outline: 'none', width: '100%', boxSizing: 'border-box' }
+  const btnStyle = (color = '#2563eb', disabled = false): React.CSSProperties => ({ padding: '.5rem 1rem', background: disabled ? '#94a3b8' : color, color: 'white', border: 'none', borderRadius: '6px', fontSize: '.875rem', fontWeight: 500, cursor: disabled ? 'not-allowed' : 'pointer' })
 
   return (
     <div style={{ maxWidth: '680px' }}>
@@ -78,10 +78,11 @@ export default function SettingsPage() {
 
       {message && (
         <div style={{
-          padding: '.75rem 1rem', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '.875rem',
+          padding: '.875rem 1rem', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '.875rem',
           background: message.type === 'ok' ? '#f0fdf4' : '#fef2f2',
           border: `1px solid ${message.type === 'ok' ? '#bbf7d0' : '#fecaca'}`,
-          color: message.type === 'ok' ? '#15803d' : '#dc2626'
+          color: message.type === 'ok' ? '#15803d' : '#dc2626',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word'
         }}>
           {message.type === 'ok' ? '✅ ' : '❌ '}{message.text}
         </div>
@@ -89,13 +90,12 @@ export default function SettingsPage() {
 
       {/* BOQ Upload */}
       <div style={card}>
-        <span style={label}>Master BOQ File</span>
+        <span style={labelStyle}>Master BOQ File</span>
         {boqStatus?.file_name ? (
           <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
             <div style={{ fontWeight: 600, color: '#15803d', fontSize: '.9rem' }}>✅ {boqStatus.file_name}</div>
             <div style={{ fontSize: '.8rem', color: '#64748b', marginTop: '.25rem' }}>
-              {boqStatus.item_count} line items &nbsp;·&nbsp;
-              Uploaded {boqStatus.uploaded_at ? new Date(boqStatus.uploaded_at).toLocaleDateString() : '—'}
+              {boqStatus.item_count} line items · Uploaded {boqStatus.uploaded_at ? new Date(boqStatus.uploaded_at).toLocaleDateString() : '—'}
             </div>
           </div>
         ) : (
@@ -103,26 +103,28 @@ export default function SettingsPage() {
             No BOQ file loaded yet.
           </div>
         )}
-        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={handleBoqUpload} />
-        <button style={btn(uploading ? '#94a3b8' : '#2563eb')} disabled={uploading} onClick={() => fileRef.current?.click()}>
-          {uploading ? '⏳ Processing…' : boqStatus?.file_name ? '🔄 Replace BOQ File' : '📂 Upload BOQ File'}
+        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.pdf" style={{ display: 'none' }} onChange={handleBoqUpload} />
+        <button style={btnStyle('#2563eb', uploading)} disabled={uploading} onClick={() => fileRef.current?.click()}>
+          {uploading ? '⏳ Processing… (may take up to 30s)' : boqStatus?.file_name ? '🔄 Replace BOQ File' : '📂 Upload BOQ File'}
         </button>
-        <p style={{ margin: '.75rem 0 0', fontSize: '.78rem', color: '#94a3b8' }}>Accepted formats: Excel (.xlsx, .xls) or CSV. Claude will extract chapters, line items, units, quantities and prices automatically.</p>
+        <p style={{ margin: '.75rem 0 0', fontSize: '.78rem', color: '#94a3b8' }}>
+          Accepted: Excel (.xlsx, .xls), CSV, or PDF (text-based). Claude extracts chapters, items, units, quantities and prices automatically.
+        </p>
       </div>
 
       {/* Email Recipients */}
       <div style={card}>
-        <span style={label}>Email Alert Recipients</span>
+        <span style={labelStyle}>Email Alert Recipients</span>
         <div style={{ display: 'flex', gap: '.5rem', marginBottom: '.75rem' }}>
           <input
-            style={{ ...input, flex: 1 }}
+            style={{ ...inputStyle, flex: 1 }}
             type="email"
             placeholder="name@company.com"
             value={newEmail}
             onChange={e => setNewEmail(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && addEmail()}
           />
-          <button style={btn()} onClick={addEmail}>Add</button>
+          <button style={btnStyle()} onClick={addEmail}>Add</button>
         </div>
         {recipients.length === 0 ? (
           <p style={{ fontSize: '.875rem', color: '#94a3b8', margin: 0 }}>No recipients added yet.</p>
@@ -140,7 +142,7 @@ export default function SettingsPage() {
 
       {/* Alert Threshold */}
       <div style={card}>
-        <span style={label}>Budget Alert Threshold</span>
+        <span style={labelStyle}>Budget Alert Threshold</span>
         <p style={{ margin: '0 0 .75rem', fontSize: '.875rem', color: '#64748b' }}>Send an alert when a chapter reaches <strong>{threshold}%</strong> of its budget.</p>
         <input type="range" min={50} max={100} value={threshold} onChange={e => setThreshold(Number(e.target.value))} style={{ width: '100%' }} />
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.75rem', color: '#94a3b8' }}>
@@ -148,7 +150,7 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      <button style={{ ...btn(), padding: '.625rem 1.5rem', opacity: saving ? 0.7 : 1 }} disabled={saving} onClick={saveSettings}>
+      <button style={{ ...btnStyle('#2563eb', saving), padding: '.625rem 1.5rem' }} disabled={saving} onClick={saveSettings}>
         {saving ? 'Saving…' : 'Save Settings'}
       </button>
     </div>
