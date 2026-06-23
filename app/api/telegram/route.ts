@@ -37,12 +37,17 @@ export async function POST(req: NextRequest) {
       const captionEntities = message.caption_entities ?? [];
       const mentioned = isPrivate || (isGroup && isMentioned(caption, captionEntities));
 
+      console.log(`[yakgu_bot] document received: ${doc.file_name}, mime: ${doc.mime_type}, mentioned: ${mentioned}, supported: ${isSupportedFile(doc.mime_type ?? "", doc.file_name ?? "")}`);
+
       if (mentioned && isSupportedFile(doc.mime_type ?? "", doc.file_name ?? "")) {
         try {
           const buffer = await telegram.downloadFile(doc.file_id);
+          console.log(`[yakgu_bot] file downloaded, size: ${buffer.length}`);
           const content = await parseFile(buffer, doc.mime_type ?? "", doc.file_name ?? "");
+          console.log(`[yakgu_bot] file parsed, content length: ${content.length}`);
           userMessage = `[Archivo recibido: ${doc.file_name}]\n${caption ? `Nota: ${caption}\n` : ""}\n${content}`;
-        } catch {
+        } catch (fileErr) {
+          console.error(`[yakgu_bot] file processing error: ${String(fileErr)}`);
           await telegram.sendMessage(chatId, `❌ No se pudo leer el archivo ${doc.file_name}. Formatos soportados: PDF, CSV, XLSX, XLS.`);
           return NextResponse.json({ ok: true });
         }
@@ -59,7 +64,8 @@ export async function POST(req: NextRequest) {
       await telegram.sendMessage(chatId, reply);
     }
   } catch (err) {
-    console.error("[yakgu_bot] error:", err);
+    console.error("[yakgu_bot] error:", String(err));
+    if (err instanceof Error) console.error("[yakgu_bot] stack:", err.stack);
   }
 
   return NextResponse.json({ ok: true });
