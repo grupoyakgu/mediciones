@@ -10,24 +10,29 @@ export class TelegramClient {
   }
 
   async sendMessage(chatId: number, text: string): Promise<void> {
-    const res = await fetch(`${this.apiBase}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text }),
-    });
-    if (!res.ok) {
-      const error = await res.text();
-      throw new Error(`Telegram sendMessage failed (${res.status}): ${error}`);
+    const MAX = 4000;
+    const chunks: string[] = [];
+    for (let i = 0; i < text.length; i += MAX) {
+      chunks.push(text.slice(i, i + MAX));
+    }
+    for (const chunk of chunks) {
+      const res = await fetch(`${this.apiBase}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text: chunk }),
+      });
+      if (!res.ok) {
+        const error = await res.text();
+        throw new Error(`Telegram sendMessage failed (${res.status}): ${error}`);
+      }
     }
   }
 
   async downloadFile(fileId: string): Promise<Buffer> {
     const metaRes = await fetch(`${this.apiBase}/getFile?file_id=${encodeURIComponent(fileId)}`);
-    if (!metaRes.ok) throw new Error(`getFile failed (${metaRes.status})`);
     const meta = await metaRes.json();
     const filePath: string = meta.result.file_path;
     const fileRes = await fetch(`https://api.telegram.org/file/bot${this.token}/${filePath}`);
-    if (!fileRes.ok) throw new Error(`file download failed (${fileRes.status})`);
     return Buffer.from(await fileRes.arrayBuffer());
   }
 }
