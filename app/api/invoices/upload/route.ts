@@ -135,10 +135,10 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
       messageContent = [{ type: 'text', text: `${promptText}\n\nDocument:\n${content}` }]
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const message = await claudeCreate({
       model: 'claude-sonnet-4-6',
       max_tokens: 8192,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       messages: [{ role: 'user', content: messageContent as any }]
     })
 
