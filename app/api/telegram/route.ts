@@ -18,10 +18,11 @@ function isMentioned(
 }
 
 export async function POST(req: NextRequest) {
+  let chatId: number | undefined;
   try {
     const body = await req.json();
     const message = body?.message;
-    const chatId: number | undefined = message?.chat?.id;
+    chatId = message?.chat?.id;
     const chatType: string | undefined = message?.chat?.type;
 
     if (!chatId) return NextResponse.json({ ok: true });
@@ -65,7 +66,13 @@ export async function POST(req: NextRequest) {
       await telegram.sendMessage(chatId, reply);
     }
   } catch (err) {
-    console.error(`top_err=${String(err)}`);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(`top_err=${errMsg}`);
+    if (chatId) {
+      try {
+        await telegram.sendMessage(chatId, `⚠️ DEBUG ERROR: ${errMsg.slice(0, 500)}`);
+      } catch {}
+    }
   }
 
   return NextResponse.json({ ok: true });
