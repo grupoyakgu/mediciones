@@ -109,6 +109,19 @@ export default function Sidebar({ userEmail }: { userEmail: string }) {
           All Projects
         </Link>
 
+        {/* Project Pricing */}
+        <Link
+          href="/dashboard/pricing"
+          className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
+            pathname.startsWith('/dashboard/pricing')
+              ? 'bg-white/10 text-white font-medium'
+              : 'text-white/50 hover:text-white hover:bg-white/5'
+          }`}
+        >
+          <span className="text-base leading-none">💰</span>
+          Project Pricing
+        </Link>
+
         {/* Active project section */}
         {activeProjectId && activeProject && (
           <div className="mt-4">
