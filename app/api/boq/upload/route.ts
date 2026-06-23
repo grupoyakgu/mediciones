@@ -6,6 +6,39 @@ import Anthropic from '@anthropic-ai/sdk'
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 const SETTINGS_ID = 'aaaaaaaa-0000-0000-0000-000000000001'
 
+function extractJsonArray(text: string): Record<string, unknown>[] | null {
+  const start = text.indexOf('[')
+  if (start === -1) return null
+
+  // 1. Try direct parse (handles perfectly formed response)
+  try {
+    const parsed = JSON.parse(text)
+    if (Array.isArray(parsed)) return parsed
+  } catch { /* continue */ }
+
+  // 2. Try slicing from [ to last ] (handles trailing text/notes after the array)
+  const end = text.lastIndexOf(']')
+  if (end > start) {
+    try {
+      const parsed = JSON.parse(text.slice(start, end + 1))
+      if (Array.isArray(parsed)) return parsed
+    } catch { /* continue */ }
+  }
+
+  // 3. Truncation recovery: find last complete object and close the array
+  const candidate = text.slice(start)
+  const lastObj = candidate.lastIndexOf('},')
+  const closeAt = lastObj !== -1 ? lastObj + 1 : candidate.lastIndexOf('}')
+  if (closeAt > 0) {
+    try {
+      const parsed = JSON.parse(candidate.slice(0, closeAt + 1) + ']')
+      if (Array.isArray(parsed)) return parsed
+    } catch { /* continue */ }
+  }
+
+  return null
+}
+
 export async function POST(req: NextRequest) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -72,37 +105,16 @@ ${content.slice(0, 14000)}`
     return NextResponse.json({ error: `Claude API error: ${String(e)}` }, { status: 500 })
   }
 
-  const jsonText = claudeResponse.trim()
+  const jsonText = claudeResponse
     .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/, '')
+    .replace(/\s*```\s*$/i, '')
     .trim()
 
-  let items: Record<string, unknown>[] | null = null
-  try {
-    const parsed = JSON.parse(jsonText)
-    if (Array.isArray(parsed)) items = parsed
-  } catch {
-    const match = jsonText.match(/\[[\s\S]*/)
-    if (match) {
-      let candidate = match[0]
-      if (!candidate.trimEnd().endsWith(']')) {
-        const lastComma = candidate.lastIndexOf('},')
-        if (lastComma !== -1) {
-          candidate = candidate.slice(0, lastComma + 1) + ']'
-        } else {
-          candidate = candidate + ']'
-        }
-      }
-      try {
-        const parsed = JSON.parse(candidate)
-        if (Array.isArray(parsed)) items = parsed
-      } catch { /* ignore */ }
-    }
-  }
+  const items = extractJsonArray(jsonText)
 
   if (!items) {
     return NextResponse.json({
-      error: `Could not parse Claude's response as JSON. First 300 chars: ${jsonText.slice(0, 300)}`
+      error: `Could not parse BOQ response. First 300 chars: ${jsonText.slice(0, 300)}`
     }, { status: 422 })
   }
 
