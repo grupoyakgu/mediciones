@@ -38,17 +38,17 @@ export async function POST(req: NextRequest) {
       const mentioned = isPrivate || (isGroup && isMentioned(caption, captionEntities));
       const supported = isSupportedFile(doc.mime_type ?? "", doc.file_name ?? "");
 
-      console.log("DOC chatType=" + chatType + " file=" + doc.file_name + " mime=" + doc.mime_type + " mentioned=" + mentioned + " supported=" + supported + " caption=" + caption + " entities=" + JSON.stringify(captionEntities));
+      console.log(`m=${mentioned} s=${supported} f=${doc.file_name} mime=${doc.mime_type}`);
 
       if (mentioned && supported) {
         try {
           const buffer = await telegram.downloadFile(doc.file_id);
-          console.log("DOWNLOADED bytes=" + buffer.length);
+          console.log(`dl=${buffer.length}`);
           const content = await parseFile(buffer, doc.mime_type ?? "", doc.file_name ?? "");
-          console.log("PARSED chars=" + content.length);
+          console.log(`parsed=${content.length}`);
           userMessage = `[Archivo recibido: ${doc.file_name}]\n${caption ? `Nota: ${caption}\n` : ""}\n${content}`;
         } catch (fileErr) {
-          console.error("FILE_ERR " + String(fileErr));
+          console.error(`file_err=${String(fileErr)}`);
           await telegram.sendMessage(chatId, `❌ No se pudo leer el archivo ${doc.file_name}. Formatos soportados: PDF, CSV, XLSX, XLS.`);
           return NextResponse.json({ ok: true });
         }
@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
       await telegram.sendMessage(chatId, reply);
     }
   } catch (err) {
-    console.error("ERR " + String(err));
+    console.error(`top_err=${String(err)}`);
   }
 
   return NextResponse.json({ ok: true });

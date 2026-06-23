@@ -1,23 +1,17 @@
 import * as XLSX from "xlsx";
 
-const CSV_MIMES = ["text/csv", "text/plain"];
-const EXCEL_MIMES = [
-  "application/vnd.ms-excel",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-];
-const PDF_MIMES = ["application/pdf"];
+const SUPPORTED_EXTENSIONS = ["pdf", "csv", "xlsx", "xls"];
 
-export function isSupportedFile(mimeType: string, fileName: string): boolean {
+export function isSupportedFile(_mimeType: string, fileName: string): boolean {
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
-  if ([...PDF_MIMES, ...CSV_MIMES, ...EXCEL_MIMES].includes(mimeType)) return true;
-  return ["pdf", "csv", "xlsx", "xls"].includes(ext);
+  return SUPPORTED_EXTENSIONS.includes(ext);
 }
 
 export async function parseFile(buffer: Buffer, mimeType: string, fileName: string): Promise<string> {
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
 
   // Excel
-  if (EXCEL_MIMES.includes(mimeType) || ext === "xlsx" || ext === "xls") {
+  if (ext === "xlsx" || ext === "xls" || mimeType.includes("excel") || mimeType.includes("spreadsheet")) {
     const workbook = XLSX.read(buffer, { type: "buffer" });
     return workbook.SheetNames.map((name) => {
       const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[name]);
@@ -26,12 +20,12 @@ export async function parseFile(buffer: Buffer, mimeType: string, fileName: stri
   }
 
   // CSV
-  if (CSV_MIMES.includes(mimeType) || ext === "csv") {
+  if (ext === "csv" || mimeType.includes("csv") || mimeType === "text/plain") {
     return buffer.toString("utf-8").trim();
   }
 
-  // PDF — extract raw text bytes (works for text-based PDFs without native deps)
-  if (PDF_MIMES.includes(mimeType) || ext === "pdf") {
+  // PDF
+  if (ext === "pdf" || mimeType === "application/pdf") {
     const raw = buffer.toString("latin1");
     const chunks: string[] = [];
     const regex = /\(([^\\)]{4,})\)/g;
