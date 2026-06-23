@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
@@ -713,7 +713,7 @@ export default function PricingPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
-                      {displayItems.map((item, itemIdx) => {
+                      {displayItems.map((item) => {
                         // Find real index in ch.items for updateManualPrice
                         const realIdx = ch.items.indexOf(item)
                         const labelColor = MATCH_COLORS[item.matchLabel]
