@@ -1,28 +1,103 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import Anthropic from '@anthropic-ai/sdk'
 import * as XLSX from 'xlsx'
 
-function stripFences(text: string): string {
-  return text.replace(/^```[\w]*[\r\n]?/, '').replace(/[\r\n]?```\s*$/, '').trim()
+interface BoqRow {
+  chapter_id: string
+  chapter_name: string
+  item_code: string
+  description: string
+  unit: string
+  quantity: number | null
+  unit_price: number | null
+  total_amount: number | null
 }
 
-async function parseWithClaude(content: string, filename: string): Promise<Record<string, unknown>[]> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+function toNum(v: unknown): number | null {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  return isNaN(n) ? null : n
+}
 
-  const prompt = `You are parsing a Bill of Quantities (BOQ / Mediciones) file.\n\nExtract ALL line items from this file. Return a JSON array where each element has:\n- chapter_id: string (e.g. "01", "01.01", "02")\n- chapter_name: string (chapter/section name)\n- item_code: string (item reference code, may be empty)\n- description: string (item description)\n- unit: string (unit of measure)\n- quantity: number or null\n- unit_price: number or null\n- total_amount: number or null\n\nReturn ONLY a JSON array with no explanation. File: ${filename}\n\nContent:\n${content.slice(0, 60000)}`
+/**
+ * Parse an XLSX/XLS workbook directly.
+ * Expects columns: A=code, B=type(Capítulo|Partida), C=unit, D=description, E=qty, F=unit_price, G=total
+ */
+function parseXlsx(buffer: ArrayBuffer): BoqRow[] {
+  const workbook = XLSX.read(buffer, { type: 'array' })
+  const sheet = workbook.Sheets[workbook.SheetNames[0]]
+  const rawRows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true })
 
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 8192,
-    messages: [{ role: 'user', content: prompt }],
-  })
+  const chapterNames = new Map<string, string>()
+  const items: BoqRow[] = []
 
-  const block = response.content[0]
-  if (block.type !== 'text') throw new Error('Unexpected response type')
-  const parsed = JSON.parse(stripFences(block.text))
-  if (!Array.isArray(parsed)) throw new Error('Expected array from Claude')
-  return parsed
+  for (const row of rawRows) {
+    if (!Array.isArray(row)) continue
+    const code = String(row[0] ?? '').trim()
+    const nat  = String(row[1] ?? '').trim()
+    const unit = String(row[2] ?? '').trim()
+    const desc = String(row[3] ?? '').trim()
+
+    if (!code || !nat) continue
+
+    if (nat === 'Capítulo' || nat === 'Capitulo') {
+      chapterNames.set(code, desc)
+    } else if (nat === 'Partida') {
+      const topChapter = code.split('.')[0]
+      const chapterName = chapterNames.get(topChapter) ?? ''
+      items.push({
+        chapter_id: code,
+        chapter_name: chapterName,
+        item_code: code,
+        description: desc,
+        unit,
+        quantity: toNum(row[4]),
+        unit_price: toNum(row[5]),
+        total_amount: toNum(row[6]),
+      })
+    }
+  }
+
+  return items
+}
+
+/**
+ * Parse a CSV/text BOQ using the same column convention as the XLSX parser.
+ * Falls back to a best-effort line-by-line heuristic for other formats.
+ */
+function parseCsv(text: string): BoqRow[] {
+  const lines = text.split(/\r?\n/)
+  const chapterNames = new Map<string, string>()
+  const items: BoqRow[] = []
+
+  for (const line of lines) {
+    const cols = line.split(',')
+    const code = cols[0]?.trim() ?? ''
+    const nat  = cols[1]?.trim() ?? ''
+    const unit = cols[2]?.trim() ?? ''
+    const desc = cols[3]?.trim() ?? ''
+
+    if (!code || !nat) continue
+
+    if (nat === 'Capítulo' || nat === 'Capitulo') {
+      chapterNames.set(code, desc)
+    } else if (nat === 'Partida') {
+      const topChapter = code.split('.')[0]
+      const chapterName = chapterNames.get(topChapter) ?? ''
+      items.push({
+        chapter_id: code,
+        chapter_name: chapterName,
+        item_code: code,
+        description: desc,
+        unit,
+        quantity: toNum(cols[4]?.replace(/"/g, '').replace(/,/g, '')),
+        unit_price: toNum(cols[5]?.replace(/"/g, '').replace(/,/g, '')),
+        total_amount: toNum(cols[6]?.replace(/"/g, '').replace(/,/g, '')),
+      })
+    }
+  }
+
+  return items
 }
 
 export async function POST(req: NextRequest) {
@@ -40,34 +115,36 @@ export async function POST(req: NextRequest) {
       process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     )
 
-    let content = ''
     const filename = file.name.toLowerCase()
+    let items: BoqRow[] = []
 
     if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
       const buffer = await file.arrayBuffer()
-      const workbook = XLSX.read(buffer, { type: 'array' })
-      const sheet = workbook.Sheets[workbook.SheetNames[0]]
-      content = XLSX.utils.sheet_to_csv(sheet)
+      items = parseXlsx(buffer)
     } else {
-      content = await file.text()
+      const text = await file.text()
+      items = parseCsv(text)
     }
 
-    const items = await parseWithClaude(content, file.name)
+    if (items.length === 0) {
+      return NextResponse.json({ error: 'No BOQ items found in file. Check that column B contains "Partida" or "Capítulo".' }, { status: 422 })
+    }
 
+    // Delete existing BOQ for this project before inserting
     await supabase.from('boq_items').delete().eq('project_id', projectId)
 
-    const BATCH = 200
+    const BATCH = 500
     for (let i = 0; i < items.length; i += BATCH) {
       const batch = items.slice(i, i + BATCH).map((item) => ({
         project_id: projectId,
-        chapter_id: String(item.chapter_id ?? ''),
-        chapter_name: String(item.chapter_name ?? ''),
-        item_code: String(item.item_code ?? ''),
-        description: String(item.description ?? ''),
-        unit: String(item.unit ?? ''),
-        quantity: item.quantity != null ? Number(item.quantity) : null,
-        unit_price: item.unit_price != null ? Number(item.unit_price) : null,
-        total_amount: item.total_amount != null ? Number(item.total_amount) : null,
+        chapter_id: item.chapter_id,
+        chapter_name: item.chapter_name,
+        item_code: item.item_code,
+        description: item.description,
+        unit: item.unit,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        total_amount: item.total_amount,
       }))
       const { error } = await supabase.from('boq_items').insert(batch)
       if (error) throw new Error(error.message)
