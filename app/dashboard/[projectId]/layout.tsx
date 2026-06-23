@@ -1,13 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { notFound } from 'next/navigation'
-import ProjectNav from './ProjectNav'
-
-interface Project {
-  id: string
-  name: string
-  currency: string
-}
 
 export default async function ProjectLayout({
   children,
@@ -32,19 +25,11 @@ export default async function ProjectLayout({
 
   const { data: project } = await supabase
     .from('projects')
-    .select('id, name, currency')
+    .select('id, name')
     .eq('id', params.projectId)
     .single()
 
   if (!project) notFound()
 
-  return (
-    <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">{(project as Project).name}</h1>
-        <ProjectNav projectId={params.projectId} />
-      </div>
-      {children}
-    </div>
-  )
+  return <>{children}</>
 }

@@ -1,7 +1,7 @@
-import Link from 'next/link'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
+import Sidebar from './Sidebar'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const cookieStore = cookies()
@@ -22,13 +22,13 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (!session) redirect('/login')
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center gap-4">
-        <Link href="/dashboard" className="text-xl font-bold text-blue-600">📊 Mediciones</Link>
-        <span className="text-gray-300">|</span>
-        <Link href="/dashboard" className="text-sm text-gray-600 hover:text-blue-600">Projects</Link>
-      </header>
-      <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>
+    <div className="flex h-screen bg-[#0a0a0a] overflow-hidden">
+      <Sidebar userEmail={session.user.email ?? ''} />
+      <div className="flex-1 flex flex-col overflow-hidden bg-[#fafafa]">
+        <main className="flex-1 overflow-y-auto p-8">
+          {children}
+        </main>
+      </div>
     </div>
   )
 }

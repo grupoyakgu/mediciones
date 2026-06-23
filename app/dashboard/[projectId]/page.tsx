@@ -39,8 +39,8 @@ export default async function OverviewPage({ params }: { params: { projectId: st
   const alertCount = (invoiceItems ?? []).filter(i => i.match_status !== 'ok').length
   const currency = (project as { currency?: string } | null)?.currency ?? 'EUR'
   const threshold = (project as { alert_threshold_pct?: number } | null)?.alert_threshold_pct ?? 90
+  const projectName = (project as { name?: string } | null)?.name ?? ''
 
-  // Chapter budget vs invoiced
   const chapterMap = new Map<string, { budget: number; invoiced: number }>()
   for (const item of boqItems ?? []) {
     const ch = item.chapter_name || 'Sin capítulo'
@@ -67,7 +67,6 @@ export default async function OverviewPage({ params }: { params: { projectId: st
     .sort((a, b) => b.budget - a.budget)
     .slice(0, 10)
 
-  // Cumulative spend
   const cumData: { date: string; cumulative: number }[] = []
   let running = 0
   for (const inv of invoices ?? []) {
@@ -79,13 +78,22 @@ export default async function OverviewPage({ params }: { params: { projectId: st
     new Intl.NumberFormat('es-ES', { style: 'currency', currency }).format(n)
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
+      {/* Page header */}
+      <div className="border-b border-gray-200 pb-6">
+        <h1 className="text-xl font-semibold text-gray-900">{projectName}</h1>
+        <p className="text-sm text-gray-500 mt-0.5">Overview</p>
+      </div>
+
+      {/* KPI cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard label="Total Budget" value={fmt(totalBudget)} />
         <KpiCard label="Total Invoiced" value={fmt(totalInvoiced)} />
-        <KpiCard label="% Used" value={`${pctUsed.toFixed(1)}%`} warn={pctUsed >= threshold} />
+        <KpiCard label="Budget Used" value={`${pctUsed.toFixed(1)}%`} warn={pctUsed >= threshold} />
         <KpiCard label="Alerts" value={String(alertCount)} warn={alertCount > 0} />
       </div>
+
+      {/* Charts */}
       <OverviewCharts chapterData={chapterData} cumData={cumData} currency={currency} />
     </div>
   )
@@ -93,13 +101,14 @@ export default async function OverviewPage({ params }: { params: { projectId: st
 
 function KpiCard({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
   return (
-    <div className={`bg-white rounded-xl border p-4 ${
-      warn ? 'border-orange-300 bg-orange-50' : 'border-gray-200'
+    <div className={`bg-white rounded-xl border p-5 ${
+      warn ? 'border-amber-200' : 'border-gray-200'
     }`}>
-      <p className="text-xs text-gray-500 uppercase tracking-wide">{label}</p>
-      <p className={`text-2xl font-bold mt-1 ${
-        warn ? 'text-orange-600' : 'text-gray-900'
+      <p className="text-xs text-gray-400 font-medium uppercase tracking-wider">{label}</p>
+      <p className={`text-2xl font-bold mt-2 ${
+        warn ? 'text-amber-600' : 'text-gray-900'
       }`}>{value}</p>
+      {warn && <p className="text-xs text-amber-500 mt-1">Needs attention</p>}
     </div>
   )
 }
