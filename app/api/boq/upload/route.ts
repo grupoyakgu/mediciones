@@ -34,22 +34,31 @@ export async function POST(req: NextRequest) {
       max_tokens: 8192,
       messages: [{
         role: 'user',
-        content: `You are parsing a Bill of Quantities (BOQ / Mediciones) file. Extract all entries and return a JSON array.
+        content: `You are parsing a Bill of Quantities (BOQ / Presupuesto / Mediciones) file. The file may be in English or Spanish. Extract all entries and return a JSON array.
+
+Spanish terminology mapping:
+- "Capítulo" or "Cap." = chapter_id / chapter_name
+- "Partida" or "Cod." = item_code
+- "Descripción" or "Concepto" = description
+- "Ud" / "Uds" / "Unidad" = unit
+- "Medición" / "Cantidad" = quantity
+- "Precio" / "P.U." / "Precio Unitario" = unit_price
+- "Importe" / "Total" / "Presupuesto" = total_amount
 
 Each element must have these fields (use null when not available):
 - chapter_id: string | null
 - chapter_name: string | null
 - item_code: string | null
-- description: string (required)
+- description: string (required, use original language)
 - unit: string | null
 - quantity: number | null
 - unit_price: number | null
 - total_amount: number | null
 
 Rules:
-- Include chapter header rows.
-- Skip blank rows.
-- Numbers must be plain numbers, no symbols or thousand separators.
+- Include chapter/capítulo header rows (set description to the chapter name).
+- Skip completely blank rows.
+- Numbers must be plain numbers — remove currency symbols, thousand separators (. or ,), keep decimal point as a period.
 - Return ONLY a raw JSON array, no markdown, no code fences, no explanation.
 
 File content:

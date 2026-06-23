@@ -34,7 +34,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'File appears empty or unreadable.' }, { status: 422 })
   }
 
-  // Ask Claude to extract invoice header + line items
   let claudeResponse: string
   try {
     const response = await anthropic.messages.create({
@@ -42,7 +41,17 @@ export async function POST(req: NextRequest) {
       max_tokens: 8192,
       messages: [{
         role: 'user',
-        content: `You are parsing a construction invoice or payment certificate. Extract the data and return a single JSON object.
+        content: `You are parsing a construction invoice, payment certificate, or "certificación de obra". The file may be in English or Spanish. Extract the data and return a single JSON object.
+
+Spanish terminology:
+- "Factura" / "Nº Factura" = invoice_number
+- "Fecha" = invoice_date
+- "Importe total" / "Total" / "Base imponible" = total_amount
+- "Capítulo" / "Cap." = chapter_ref on the line item
+- "Descripción" / "Concepto" = description
+- "Cantidad" / "Medición" = quantity
+- "Precio" / "P.U." = unit_price
+- "Importe" / "Subtotal" = total_amount on the line item
 
 Required format:
 {
@@ -61,7 +70,8 @@ Required format:
 }
 
 Rules:
-- Numbers must be plain numbers, no currency symbols or thousand separators.
+- Keep descriptions in their original language.
+- Numbers must be plain numbers — remove currency symbols and thousand separators (. or ,), keep decimal as a period.
 - invoice_date in ISO format YYYY-MM-DD or null.
 - Return ONLY a raw JSON object, no markdown, no code fences, no explanation.
 
@@ -76,7 +86,6 @@ ${content.slice(0, 14000)}`
     return NextResponse.json({ error: `Claude API error: ${String(e)}` }, { status: 500 })
   }
 
-  // Parse Claude's response
   let jsonText = claudeResponse.trim()
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/, '')
@@ -87,7 +96,6 @@ ${content.slice(0, 14000)}`
     const parsed = JSON.parse(jsonText)
     if (parsed && Array.isArray(parsed.items)) invoiceData = parsed
   } catch {
-    // Try finding the object start
     const match = jsonText.match(/\{[\s\S]*/)
     if (match) {
       try {
@@ -103,14 +111,12 @@ ${content.slice(0, 14000)}`
     }, { status: 422 })
   }
 
-  // Load BOQ items for matching
   const { data: boqItems } = await supabase
     .from('boq_items')
     .select('id, description, chapter_id, chapter_name, item_code, unit, quantity, unit_price, total_amount')
 
   const boq = boqItems ?? []
 
-  // Insert invoice record
   const invoiceTotal = invoiceData.total_amount ??
     invoiceData.items.reduce((s, i) => s + (i.total_amount ?? 0), 0)
 
@@ -131,9 +137,12 @@ ${content.slice(0, 14000)}`
     return NextResponse.json({ error: `DB error creating invoice: ${invErr?.message}` }, { status: 500 })
   }
 
-  // Match each line item against BOQ
   function normalize(s: string): string {
-    return s.toLowerCase().replace(/[^a-z0-9À-ɏ]/g, ' ').replace(/\s+/g, ' ').trim()
+    return s.toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')  // strip accents: é->e, ñ->n, etc.
+      .replace(/[^a-z0-9]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
   }
 
   function matchBoq(desc: string, chapterRef: string | null | undefined) {
@@ -142,7 +151,7 @@ ${content.slice(0, 14000)}`
     const normChapter = chapterRef ? normalize(chapterRef) : null
 
     // Exact description match
-    let hit = boq.find(b => normalize(b.description) === normDesc)
+    const hit = boq.find(b => normalize(b.description) === normDesc)
     if (hit) return hit
 
     // Word overlap score
@@ -153,8 +162,10 @@ ${content.slice(0, 14000)}`
       const bWords = normalize(b.description).split(' ').filter(w => w.length > 3)
       const overlap = bWords.filter(w => descWords.has(w)).length
       const score = overlap / Math.max(descWords.size, bWords.length, 1)
-      // Boost if chapter matches
-      const chapterBoost = normChapter && (normalize(b.chapter_id ?? '') === normChapter || normalize(b.chapter_name ?? '').includes(normChapter)) ? 0.2 : 0
+      const chapterBoost = normChapter && (
+        normalize(b.chapter_id ?? '') === normChapter ||
+        normalize(b.chapter_name ?? '').includes(normChapter)
+      ) ? 0.2 : 0
       if (score + chapterBoost > bestScore) {
         bestScore = score + chapterBoost
         best = b
@@ -188,8 +199,7 @@ ${content.slice(0, 14000)}`
         const qtyOver = bQty > 0 && invQty > bQty * 1.05
         const priceOver = bPrice > 0 && invPrice > bPrice * 1.05
 
-        if (qtyOver && priceOver) matchStatus = 'warning_quantity'
-        else if (qtyOver) matchStatus = 'warning_quantity'
+        if (qtyOver) matchStatus = 'warning_quantity'
         else if (priceOver) matchStatus = 'warning_price'
         else matchStatus = 'ok'
 
@@ -222,7 +232,6 @@ ${content.slice(0, 14000)}`
     }
   }
 
-  // Update invoice with final status and alert count
   const finalStatus = alertsCount > 0 ? 'alerts' : 'ok'
   await supabase.from('invoices').update({ status: finalStatus, alerts_count: alertsCount }).eq('id', invoice.id)
 
