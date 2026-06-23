@@ -1,258 +1,177 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import { parseFile } from '@/lib/file-parser'
+import { createClient } from '@supabase/supabase-js'
 import Anthropic from '@anthropic-ai/sdk'
+import * as XLSX from 'xlsx'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-
-interface InvoiceLineRaw {
-  description: string
-  chapter_ref?: string | null
-  quantity?: number | null
-  unit_price?: number | null
-  total_amount?: number | null
+function stripFences(text: string): string {
+  return text.replace(/^```[\w]*[\r\n]?/, '').replace(/[\r\n]?```\s*$/, '').trim()
 }
 
-interface InvoiceData {
-  invoice_number?: string | null
-  invoice_date?: string | null
-  total_amount?: number | null
-  items: InvoiceLineRaw[]
+async function parseInvoiceWithClaude(content: string, filename: string): Promise<{
+  invoice_number: string
+  invoice_date: string
+  supplier: string
+  total_amount: number
+  items: Record<string, unknown>[]
+}> {
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+
+  const prompt = `Parse this invoice/certificate file and extract:
+
+1. Invoice metadata (invoice_number, invoice_date as YYYY-MM-DD, supplier name, total_amount as number)
+2. All line items, each with:
+   - description: string
+   - unit: string
+   - quantity: number or null
+   - unit_price: number or null
+   - total_amount: number or null
+   - item_code: string (if present)
+
+Return ONLY a JSON object with structure:
+{
+  "invoice_number": "...",
+  "invoice_date": "YYYY-MM-DD",
+  "supplier": "...",
+  "total_amount": 0,
+  "items": [...]
 }
 
-function extractJsonObject(text: string): InvoiceData | null {
-  // 1. Direct parse
-  try {
-    const parsed = JSON.parse(text)
-    if (parsed && Array.isArray(parsed.items)) return parsed as InvoiceData
-  } catch { /* continue */ }
+File: ${filename}
 
-  // 2. Slice from first { to last } (handles trailing text)
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start !== -1 && end > start) {
-    try {
-      const parsed = JSON.parse(text.slice(start, end + 1))
-      if (parsed && Array.isArray(parsed.items)) return parsed as InvoiceData
-    } catch { /* continue */ }
+Content:
+${content.slice(0, 60000)}`
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 8192,
+    messages: [{ role: 'user', content: prompt }],
+  })
+
+  const block = response.content[0]
+  if (block.type !== 'text') throw new Error('Unexpected response type')
+  return JSON.parse(stripFences(block.text))
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function matchInvoiceItemsToBoq(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  projectId: string,
+  invoiceItems: Record<string, unknown>[]
+): Promise<{ boq_item_id: string | null; match_status: string; boq_unit_price: number | null; boq_qty: number | null; description: string; unit: string; quantity: number | null; unit_price: number | null; total_amount: number | null; item_code: string }[]> {
+  const PAGE = 500
+  let from = 0
+  const boqItems: Record<string, unknown>[] = []
+  while (true) {
+    const { data } = await supabase
+      .from('boq_items')
+      .select('id,description,unit,unit_price,quantity,item_code')
+      .eq('project_id', projectId)
+      .range(from, from + PAGE - 1)
+    if (!data || data.length === 0) break
+    boqItems.push(...data)
+    if (data.length < PAGE) break
+    from += PAGE
   }
 
-  return null
+  return invoiceItems.map((item) => {
+    const desc = String(item.description ?? '').toLowerCase()
+    const code = String(item.item_code ?? '').toLowerCase()
+
+    let match = boqItems.find((b) => code && String(b.item_code ?? '').toLowerCase() === code)
+    if (!match) {
+      match = boqItems.find((b) => {
+        const bDesc = String(b.description ?? '').toLowerCase()
+        return bDesc === desc || (desc.length > 10 && bDesc.includes(desc.slice(0, Math.min(30, desc.length))))
+      })
+    }
+
+    return {
+      boq_item_id: match ? String(match.id) : null,
+      match_status: match ? 'matched' : 'not_in_boq',
+      boq_unit_price: match ? (match.unit_price as number | null) : null,
+      boq_qty: match ? (match.quantity as number | null) : null,
+      description: String(item.description ?? ''),
+      unit: String(item.unit ?? ''),
+      quantity: item.quantity != null ? Number(item.quantity) : null,
+      unit_price: item.unit_price != null ? Number(item.unit_price) : null,
+      total_amount: item.total_amount != null ? Number(item.total_amount) : null,
+      item_code: String(item.item_code ?? ''),
+    }
+  })
 }
 
 export async function POST(req: NextRequest) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const formData = await req.formData()
-  const file = formData.get('file') as File | null
-  if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
-
-  const buffer = Buffer.from(await file.arrayBuffer())
-  let content: string
   try {
-    content = await parseFile(buffer, file.type, file.name)
-  } catch (e) {
-    return NextResponse.json({ error: `Could not read file: ${String(e)}` }, { status: 422 })
-  }
+    const formData = await req.formData()
+    const file = formData.get('file') as File | null
+    const projectId = formData.get('projectId') as string | null
 
-  if (!content || content.length < 20) {
-    return NextResponse.json({ error: 'File appears empty or unreadable.' }, { status: 422 })
-  }
-
-  let claudeResponse: string
-  try {
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 8192,
-      messages: [{
-        role: 'user',
-        content: `You are parsing a construction invoice, payment certificate, or "certificación de obra". The file may be in English or Spanish. Extract the data and return a single JSON object.
-
-Spanish terminology:
-- "Factura" / "Nº Factura" = invoice_number
-- "Fecha" = invoice_date
-- "Importe total" / "Total" / "Base imponible" = total_amount
-- "Capítulo" / "Cap." = chapter_ref on the line item
-- "Descripción" / "Concepto" = description
-- "Cantidad" / "Medición" = quantity
-- "Precio" / "P.U." = unit_price
-- "Importe" / "Subtotal" = total_amount on the line item
-
-Required format:
-{
-  "invoice_number": string | null,
-  "invoice_date": "YYYY-MM-DD" | null,
-  "total_amount": number | null,
-  "items": [
-    {
-      "description": string,
-      "chapter_ref": string | null,
-      "quantity": number | null,
-      "unit_price": number | null,
-      "total_amount": number | null
+    if (!file || !projectId) {
+      return NextResponse.json({ error: 'Missing file or projectId' }, { status: 400 })
     }
-  ]
-}
 
-Rules:
-- Keep descriptions in their original language.
-- Numbers must be plain numbers — remove currency symbols and thousand separators (. or ,), keep decimal as a period.
-- invoice_date in ISO format YYYY-MM-DD or null.
-- Return ONLY a raw JSON object, no markdown, no code fences, no explanation.
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    )
 
-File content:
-${content.slice(0, 14000)}`
-      }]
-    })
-    const block = response.content[0]
-    if (block.type !== 'text') throw new Error('Unexpected Claude response type')
-    claudeResponse = block.text
-  } catch (e) {
-    return NextResponse.json({ error: `Claude API error: ${String(e)}` }, { status: 500 })
-  }
+    let content = ''
+    const filename = file.name.toLowerCase()
 
-  const jsonText = claudeResponse
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```\s*$/i, '')
-    .trim()
-
-  const invoiceData = extractJsonObject(jsonText)
-
-  if (!invoiceData) {
-    return NextResponse.json({
-      error: `Could not parse invoice response. First 300 chars: ${jsonText.slice(0, 300)}`
-    }, { status: 422 })
-  }
-
-  const { data: boqItems } = await supabase
-    .from('boq_items')
-    .select('id, description, chapter_id, chapter_name, item_code, unit, quantity, unit_price, total_amount')
-
-  const boq = boqItems ?? []
-
-  const invoiceTotal = invoiceData.total_amount ??
-    invoiceData.items.reduce((s, i) => s + (i.total_amount ?? 0), 0)
-
-  const { data: invoice, error: invErr } = await supabase
-    .from('invoices')
-    .insert({
-      invoice_number: invoiceData.invoice_number ?? null,
-      invoice_date: invoiceData.invoice_date ?? null,
-      file_name: file.name,
-      status: 'pending',
-      total_amount: invoiceTotal,
-      source: 'dashboard',
-    })
-    .select('id')
-    .single()
-
-  if (invErr || !invoice) {
-    return NextResponse.json({ error: `DB error creating invoice: ${invErr?.message}` }, { status: 500 })
-  }
-
-  function normalize(s: string): string {
-    return s.toLowerCase()
-      .normalize('NFD').replace(/[̀-ͯ]/g, '')
-      .replace(/[^a-z0-9]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-  }
-
-  function matchBoq(desc: string, chapterRef: string | null | undefined) {
-    if (!boq.length) return null
-    const normDesc = normalize(desc)
-    const normChapter = chapterRef ? normalize(chapterRef) : null
-
-    const hit = boq.find(b => normalize(b.description) === normDesc)
-    if (hit) return hit
-
-    const descWords = new Set(normDesc.split(' ').filter(w => w.length > 3))
-    let best: typeof boq[0] | null = null
-    let bestScore = 0
-    for (const b of boq) {
-      const bWords = normalize(b.description).split(' ').filter(w => w.length > 3)
-      const overlap = bWords.filter(w => descWords.has(w)).length
-      const score = overlap / Math.max(descWords.size, bWords.length, 1)
-      const chapterBoost = normChapter && (
-        normalize(b.chapter_id ?? '') === normChapter ||
-        normalize(b.chapter_name ?? '').includes(normChapter)
-      ) ? 0.2 : 0
-      if (score + chapterBoost > bestScore) {
-        bestScore = score + chapterBoost
-        best = b
-      }
+    if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
+      const buffer = await file.arrayBuffer()
+      const workbook = XLSX.read(buffer, { type: 'array' })
+      const sheet = workbook.Sheets[workbook.SheetNames[0]]
+      content = XLSX.utils.sheet_to_csv(sheet)
+    } else if (filename.endsWith('.pdf')) {
+      content = `[PDF file: ${file.name}] - PDF text extraction not available. Please convert to XLSX or CSV for best results.`
+    } else {
+      content = await file.text()
     }
-    return bestScore >= 0.35 ? best : null
-  }
 
-  let alertsCount = 0
-  const lineRows = invoiceData.items
-    .filter(item => item.description)
-    .map(item => {
-      const matched = matchBoq(item.description, item.chapter_ref)
-      let matchStatus = 'not_in_boq'
-      let boqQty: number | null = null
-      let boqPrice: number | null = null
-      let qtyDelta: number | null = null
-      let priceDeltaPct: number | null = null
+    const parsed = await parseInvoiceWithClaude(content, file.name)
+    const matchedItems = await matchInvoiceItemsToBoq(supabase, projectId, parsed.items)
 
-      if (matched) {
-        boqQty = matched.quantity
-        boqPrice = matched.unit_price
-        const invQty = item.quantity ?? 0
-        const invPrice = item.unit_price ?? 0
-        const bQty = matched.quantity ?? 0
-        const bPrice = matched.unit_price ?? 0
+    const { data: invoice, error: invError } = await supabase
+      .from('invoices')
+      .insert({
+        project_id: projectId,
+        invoice_number: parsed.invoice_number,
+        invoice_date: parsed.invoice_date,
+        supplier: parsed.supplier,
+        total_amount: parsed.total_amount,
+        status: 'processed',
+      })
+      .select('id')
+      .single()
 
-        qtyDelta = bQty > 0 ? invQty - bQty : null
-        priceDeltaPct = bPrice > 0 ? ((invPrice - bPrice) / bPrice) * 100 : null
+    if (invError || !invoice) throw new Error(invError?.message ?? 'Failed to create invoice')
 
-        const qtyOver = bQty > 0 && invQty > bQty * 1.05
-        const priceOver = bPrice > 0 && invPrice > bPrice * 1.05
-
-        if (qtyOver) matchStatus = 'warning_quantity'
-        else if (priceOver) matchStatus = 'warning_price'
-        else matchStatus = 'ok'
-
-        if (matchStatus !== 'ok') alertsCount++
-      } else {
-        alertsCount++
-      }
-
-      return {
-        invoice_id: invoice.id,
-        description: item.description,
-        chapter_ref: item.chapter_ref ?? null,
-        quantity: item.quantity ?? null,
-        unit_price: item.unit_price ?? null,
-        total_amount: item.total_amount ?? null,
-        boq_item_id: matched?.id ?? null,
-        match_status: matchStatus,
-        boq_quantity: boqQty,
-        boq_unit_price: boqPrice,
-        quantity_delta: qtyDelta,
-        price_delta_pct: priceDeltaPct ? Math.round(priceDeltaPct * 100) / 100 : null,
-      }
-    })
-
-  if (lineRows.length > 0) {
-    const { error: lineErr } = await supabase.from('invoice_items').insert(lineRows)
-    if (lineErr) {
-      await supabase.from('invoices').delete().eq('id', invoice.id)
-      return NextResponse.json({ error: `DB error inserting line items: ${lineErr.message}` }, { status: 500 })
+    if (matchedItems.length > 0) {
+      const { error: itemsError } = await supabase
+        .from('invoice_items')
+        .insert(
+          matchedItems.map((it) => ({
+            invoice_id: invoice.id,
+            boq_item_id: it.boq_item_id,
+            match_status: it.match_status,
+            boq_unit_price: it.boq_unit_price,
+            boq_qty: it.boq_qty,
+            description: it.description,
+            unit: it.unit,
+            quantity: it.quantity,
+            unit_price: it.unit_price,
+            total_amount: it.total_amount,
+            item_code: it.item_code,
+          }))
+        )
+      if (itemsError) throw new Error(itemsError.message)
     }
+
+    return NextResponse.json({ success: true, invoiceId: invoice.id, itemCount: matchedItems.length })
+  } catch (err) {
+    console.error('[invoices/upload]', err)
+    return NextResponse.json({ error: String(err) }, { status: 500 })
   }
-
-  const finalStatus = alertsCount > 0 ? 'alerts' : 'ok'
-  await supabase.from('invoices').update({ status: finalStatus, alerts_count: alertsCount }).eq('id', invoice.id)
-
-  return NextResponse.json({
-    ok: true,
-    invoice_id: invoice.id,
-    line_count: lineRows.length,
-    alerts_count: alertsCount,
-    status: finalStatus,
-  })
 }
