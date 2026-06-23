@@ -197,6 +197,7 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
         unit_price:   item.unit_price   ?? null,
         total_amount: item.total_amount ?? null,
         match_status: match ? 'ok' : 'not_in_boq',
+        match_notes:  match ? match.notes : 'No BOQ match found',
       }
     })
 
