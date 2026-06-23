@@ -5,17 +5,22 @@ import { isSupportedFile, parseFile } from '@/lib/file-parser'
 import { claudeCreate } from '@/lib/claude'
 
 function stripFences(text: string): string {
-  return text.replace(/^```[\w]*\n?/m, '').replace(/```\s*$/m, '').trim()
+  return text.replace(/^```[\w]*\s*/s, '').replace(/\s*```\s*$/s, '').trim()
 }
 
 function extractJsonArray(text: string): Record<string, unknown>[] | null {
   const cleaned = stripFences(text)
+
+  // Try full parse first
   const start = cleaned.indexOf('[')
   if (start === -1) return null
+
   try {
-    const parsed = JSON.parse(cleaned)
+    const parsed = JSON.parse(cleaned.slice(start))
     if (Array.isArray(parsed)) return parsed
   } catch {}
+
+  // Try up to last ]
   const end = cleaned.lastIndexOf(']')
   if (end > start) {
     try {
@@ -23,15 +28,26 @@ function extractJsonArray(text: string): Record<string, unknown>[] | null {
       if (Array.isArray(parsed)) return parsed
     } catch {}
   }
+
+  // Truncation recovery: find last complete object (last },) and close the array
   const candidate = cleaned.slice(start)
-  const lastObj = candidate.lastIndexOf('},')
-  const closeAt = lastObj !== -1 ? lastObj + 1 : candidate.lastIndexOf('}')
-  if (closeAt > 0) {
+  const lastComma = candidate.lastIndexOf('},')
+  if (lastComma !== -1) {
     try {
-      const parsed = JSON.parse(candidate.slice(0, closeAt + 1) + ']')
+      // slice up to and including } (not the comma), then close array
+      const parsed = JSON.parse(candidate.slice(0, lastComma + 1) + ']')
       if (Array.isArray(parsed)) return parsed
     } catch {}
   }
+  // Last resort: find last } and close array
+  const lastBrace = candidate.lastIndexOf('}')
+  if (lastBrace > 0) {
+    try {
+      const parsed = JSON.parse(candidate.slice(0, lastBrace + 1) + ']')
+      if (Array.isArray(parsed)) return parsed
+    } catch {}
+  }
+
   return null
 }
 
