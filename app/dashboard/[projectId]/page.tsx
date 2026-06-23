@@ -62,7 +62,7 @@ export default async function OverviewPage({ params }: { params: { projectId: st
       }
     }
   }
-  const chapterData = [...chapterMap.entries()]
+  const chapterData = Array.from(chapterMap.entries())
     .map(([name, v]) => ({ name: name.slice(0, 30), budget: v.budget, invoiced: v.invoiced }))
     .sort((a, b) => b.budget - a.budget)
     .slice(0, 10)
