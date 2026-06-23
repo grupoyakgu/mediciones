@@ -75,22 +75,28 @@ create index if not exists invoice_items_invoice_id_idx  on invoice_items(invoic
 create index if not exists invoice_items_boq_item_id_idx on invoice_items(boq_item_id);
 
 -- ──────────────────────────────────────────
--- RLS (disable for service role / internal API usage)
+-- RLS
 -- ──────────────────────────────────────────
 alter table projects      enable row level security;
 alter table boq_items     enable row level security;
 alter table invoices      enable row level security;
 alter table invoice_items enable row level security;
 
--- Allow all operations for authenticated users (adjust as needed)
-create policy if not exists "auth users full access" on projects
-  for all using (auth.role() = 'authenticated');
-create policy if not exists "auth users full access" on boq_items
-  for all using (auth.role() = 'authenticated');
-create policy if not exists "auth users full access" on invoices
-  for all using (auth.role() = 'authenticated');
-create policy if not exists "auth users full access" on invoice_items
-  for all using (auth.role() = 'authenticated');
+-- Create policies only if they don't already exist
+do $$ begin
+  if not exists (select 1 from pg_policies where tablename = 'projects' and policyname = 'auth users full access') then
+    create policy "auth users full access" on projects for all using (auth.role() = 'authenticated');
+  end if;
+  if not exists (select 1 from pg_policies where tablename = 'boq_items' and policyname = 'auth users full access') then
+    create policy "auth users full access" on boq_items for all using (auth.role() = 'authenticated');
+  end if;
+  if not exists (select 1 from pg_policies where tablename = 'invoices' and policyname = 'auth users full access') then
+    create policy "auth users full access" on invoices for all using (auth.role() = 'authenticated');
+  end if;
+  if not exists (select 1 from pg_policies where tablename = 'invoice_items' and policyname = 'auth users full access') then
+    create policy "auth users full access" on invoice_items for all using (auth.role() = 'authenticated');
+  end if;
+end $$;
 
 -- ──────────────────────────────────────────
 -- MIGRATION NOTES (existing databases)
