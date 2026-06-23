@@ -24,33 +24,33 @@ export async function POST(req: NextRequest) {
   }
 
   if (!content || content.length < 20) {
-    return NextResponse.json({ error: 'File appears to be empty or could not be read. For PDFs, please ensure the file contains selectable text (not a scanned image).' }, { status: 422 })
+    return NextResponse.json({ error: 'File appears empty or unreadable. For PDFs, ensure text is selectable (not a scanned image).' }, { status: 422 })
   }
 
   let claudeResponse: string
   try {
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 4096,
+      max_tokens: 8192,
       messages: [{
         role: 'user',
         content: `You are parsing a Bill of Quantities (BOQ / Mediciones) file. Extract all entries and return a JSON array.
 
 Each element must have these fields (use null when not available):
-- chapter_id: string | null  (e.g. "1", "2.3")
-- chapter_name: string | null  (section/chapter title)
-- item_code: string | null  (item reference code)
-- description: string  (required)
-- unit: string | null  (m2, ml, ud, kg, etc.)
+- chapter_id: string | null
+- chapter_name: string | null
+- item_code: string | null
+- description: string (required)
+- unit: string | null
 - quantity: number | null
-- unit_price: number | null  (EUR, plain number)
-- total_amount: number | null  (plain number)
+- unit_price: number | null
+- total_amount: number | null
 
 Rules:
-- Include chapter header rows (description but no quantity/unit_price).
+- Include chapter header rows.
 - Skip blank rows.
-- Numbers must be plain numbers — no currency symbols, no thousand separators.
-- Return ONLY a raw JSON array. No markdown, no code fences, no explanation.
+- Numbers must be plain numbers, no symbols or thousand separators.
+- Return ONLY a raw JSON array, no markdown, no code fences, no explanation.
 
 File content:
 ${content.slice(0, 14000)}`
@@ -63,25 +63,42 @@ ${content.slice(0, 14000)}`
     return NextResponse.json({ error: `Claude API error: ${String(e)}` }, { status: 500 })
   }
 
-  // Strip markdown code fences if present
+  // Strip markdown code fences
   let jsonText = claudeResponse.trim()
-  jsonText = jsonText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim()
 
-  // Extract the JSON array
-  const match = jsonText.match(/\[[\s\S]*\]/)
-  if (!match) {
-    return NextResponse.json({
-      error: `Could not find a JSON array in Claude's response. First 300 chars: ${jsonText.slice(0, 300)}`
-    }, { status: 422 })
+  // Try direct parse first
+  let items: Record<string, unknown>[] | null = null
+  try {
+    const parsed = JSON.parse(jsonText)
+    if (Array.isArray(parsed)) items = parsed
+  } catch {
+    // Try extracting array with regex
+    const match = jsonText.match(/\[[\s\S]*/)
+    if (match) {
+      let candidate = match[0]
+      // If truncated (no closing bracket), attempt to close it gracefully
+      if (!candidate.trimEnd().endsWith(']')) {
+        // Remove the last (likely incomplete) object and close the array
+        const lastComma = candidate.lastIndexOf('},')  
+        if (lastComma !== -1) {
+          candidate = candidate.slice(0, lastComma + 1) + ']'
+        } else {
+          candidate = candidate + ']'
+        }
+      }
+      try {
+        const parsed = JSON.parse(candidate)
+        if (Array.isArray(parsed)) items = parsed
+      } catch { /* ignore */ }
+    }
   }
 
-  let items: Record<string, unknown>[]
-  try {
-    items = JSON.parse(match[0])
-    if (!Array.isArray(items)) throw new Error('Parsed value is not an array')
-  } catch (e) {
+  if (!items) {
     return NextResponse.json({
-      error: `JSON parse error: ${String(e)}. Response start: ${jsonText.slice(0, 200)}`
+      error: `Could not parse Claude's response as JSON. First 300 chars: ${jsonText.slice(0, 300)}`
     }, { status: 422 })
   }
 
