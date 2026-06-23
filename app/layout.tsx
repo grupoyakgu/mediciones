@@ -1,9 +1,9 @@
-import type { Metadata } from "next";
-import "./globals.css";
+import type { Metadata } from 'next';
+import './globals.css';
 
 export const metadata: Metadata = {
-  title: "Telegram Task Manager",
-  description: "AI-powered task manager via Telegram",
+  title: 'Mediciones',
+  description: 'Construction cost control system',
 };
 
 export default function RootLayout({
