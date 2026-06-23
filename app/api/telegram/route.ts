@@ -13,13 +13,11 @@ export async function POST(req: NextRequest) {
     const text: string | undefined = message?.text;
 
     if (chatId && text) {
-      // Run agent and reply — do not await so Telegram gets 200 immediately
-      chat(chatId, text)
-        .then((reply) => telegram.sendMessage(chatId, reply))
-        .catch((err) => console.error(`[telegram] failed for chat ${chatId}:`, err));
+      const reply = await chat(chatId, text);
+      await telegram.sendMessage(chatId, reply);
     }
   } catch (err) {
-    console.error("[telegram] failed to parse request:", err);
+    console.error("[telegram] error:", err);
   }
 
   // Always return 200 — non-200 causes Telegram to retry
