@@ -25,11 +25,12 @@ function effectiveTotal(item: BoqItem): number {
   return (item.quantity ?? 0) * (item.unit_price ?? 0)
 }
 
-// Return the top-level chapter prefix: "01.02" -> "01", "03" -> "03"
 function topLevel(chapterId: string | null): string {
   if (!chapterId) return ''
   return chapterId.split('.')[0]
 }
+
+const PAGE = 2000 // fetch rows in batches to bypass the 1000-row default limit
 
 export default function BoqTable({ projectId }: { projectId: string }) {
   const supabase = createClient()
@@ -37,7 +38,6 @@ export default function BoqTable({ projectId }: { projectId: string }) {
   const [loading, setLoading] = useState(true)
 
   const [search, setSearch] = useState('')
-  // chapterFilter holds a top-level chapter id, e.g. "01", or "all"
   const [chapterFilter, setChapterFilter] = useState('all')
   const [minPrice, setMinPrice] = useState('')
   const [maxPrice, setMaxPrice] = useState('')
@@ -46,17 +46,36 @@ export default function BoqTable({ projectId }: { projectId: string }) {
   const [showSummary, setShowSummary] = useState(true)
 
   useEffect(() => {
-    supabase
-      .from('boq_items')
-      .select('*')
-      .eq('project_id', projectId)
-      .then(({ data }) => {
-        setItems(data ?? [])
+    let cancelled = false
+
+    async function fetchAll() {
+      const all: BoqItem[] = []
+      let from = 0
+
+      while (true) {
+        const { data, error } = await supabase
+          .from('boq_items')
+          .select('*')
+          .eq('project_id', projectId)
+          .order('chapter_id', { ascending: true })
+          .range(from, from + PAGE - 1)
+
+        if (error || !data || data.length === 0) break
+        all.push(...(data as BoqItem[]))
+        if (data.length < PAGE) break // last page
+        from += PAGE
+      }
+
+      if (!cancelled) {
+        setItems(all)
         setLoading(false)
-      })
+      }
+    }
+
+    fetchAll()
+    return () => { cancelled = true }
   }, [projectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Build map of top-level chapter id -> name from parent rows (chapter_id has no dot)
   const topLevelNames = useMemo(() => {
     const map = new Map<string, string>()
     for (const item of items) {
@@ -68,16 +87,13 @@ export default function BoqTable({ projectId }: { projectId: string }) {
     return map
   }, [items])
 
-  // Unique top-level chapters for the dropdown, in order
   const topLevelChapters = useMemo(() => {
     const seen = new Map<string, string>()
     for (const item of items) {
       const tl = topLevel(item.chapter_id)
-      if (tl && !seen.has(tl)) {
-        seen.set(tl, topLevelNames.get(tl) ?? tl)
-      }
+      if (tl && !seen.has(tl)) seen.set(tl, topLevelNames.get(tl) ?? tl)
     }
-    return Array.from(seen.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+    return Array.from(seen.entries()).sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
   }, [items, topLevelNames])
 
   const filtered = useMemo(() => {
@@ -91,7 +107,6 @@ export default function BoqTable({ projectId }: { projectId: string }) {
           (r.item_code ?? '').toLowerCase().includes(q)
       )
     }
-    // Filter by top-level chapter prefix
     if (chapterFilter !== 'all') {
       rows = rows.filter(r => topLevel(r.chapter_id) === chapterFilter)
     }
@@ -104,12 +119,11 @@ export default function BoqTable({ projectId }: { projectId: string }) {
       if (sortField === 'description') cmp = a.description.localeCompare(b.description)
       else if (sortField === 'unit_price') cmp = (a.unit_price ?? 0) - (b.unit_price ?? 0)
       else if (sortField === 'effective_total') cmp = effectiveTotal(a) - effectiveTotal(b)
-      else cmp = (a.chapter_id ?? '').localeCompare(b.chapter_id ?? '')
+      else cmp = (a.chapter_id ?? '').localeCompare(b.chapter_id ?? '', undefined, { numeric: true })
       return sortDir === 'asc' ? cmp : -cmp
     })
   }, [items, search, chapterFilter, minPrice, maxPrice, sortField, sortDir])
 
-  // Summary grouped by top-level chapter, summing all sub-items
   const chapterSummary = useMemo(() => {
     const map = new Map<string, { name: string; count: number; total: number }>()
     for (const item of filtered) {
@@ -122,7 +136,7 @@ export default function BoqTable({ projectId }: { projectId: string }) {
     }
     return Array.from(map.entries())
       .map(([id, v]) => ({ id, ...v }))
-      .sort((a, b) => a.id.localeCompare(b.id))
+      .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))
   }, [filtered, topLevelNames])
 
   const grandTotal = chapterSummary.reduce((s, c) => s + c.total, 0)
