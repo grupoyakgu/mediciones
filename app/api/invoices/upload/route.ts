@@ -157,7 +157,6 @@ ${content}`
       .insert({
         project_id:     projectId,
         invoice_number: invoiceData.invoice_number ?? null,
-        supplier:       invoiceData.supplier       ?? null,
         invoice_date:   invoiceData.invoice_date   ?? null,
         total_amount:   invoiceData.total_amount   ?? null,
         file_name:      file.name,
