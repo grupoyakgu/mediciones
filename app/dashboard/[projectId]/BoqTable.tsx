@@ -20,10 +20,15 @@ type SortDir = 'asc' | 'desc'
 const fmt = (n: number | null) =>
   n == null ? '—' : n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-// Use stored total_amount, fall back to qty * unit_price
 function effectiveTotal(item: BoqItem): number {
   if (item.total_amount != null && item.total_amount !== 0) return item.total_amount
   return (item.quantity ?? 0) * (item.unit_price ?? 0)
+}
+
+// Return the top-level chapter prefix: "01.02" -> "01", "03" -> "03"
+function topLevel(chapterId: string | null): string {
+  if (!chapterId) return ''
+  return chapterId.split('.')[0]
 }
 
 export default function BoqTable({ projectId }: { projectId: string }) {
@@ -32,6 +37,7 @@ export default function BoqTable({ projectId }: { projectId: string }) {
   const [loading, setLoading] = useState(true)
 
   const [search, setSearch] = useState('')
+  // chapterFilter holds a top-level chapter id, e.g. "01", or "all"
   const [chapterFilter, setChapterFilter] = useState('all')
   const [minPrice, setMinPrice] = useState('')
   const [maxPrice, setMaxPrice] = useState('')
@@ -50,14 +56,29 @@ export default function BoqTable({ projectId }: { projectId: string }) {
       })
   }, [projectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const chapters = useMemo(() => {
+  // Build map of top-level chapter id -> name from parent rows (chapter_id has no dot)
+  const topLevelNames = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const item of items) {
+      const id = item.chapter_id ?? ''
+      if (id && !id.includes('.') && item.chapter_name) {
+        map.set(id, item.chapter_name)
+      }
+    }
+    return map
+  }, [items])
+
+  // Unique top-level chapters for the dropdown, in order
+  const topLevelChapters = useMemo(() => {
     const seen = new Map<string, string>()
     for (const item of items) {
-      const key = item.chapter_id ?? ''
-      if (!seen.has(key)) seen.set(key, item.chapter_name ?? item.chapter_id ?? 'Uncategorised')
+      const tl = topLevel(item.chapter_id)
+      if (tl && !seen.has(tl)) {
+        seen.set(tl, topLevelNames.get(tl) ?? tl)
+      }
     }
     return Array.from(seen.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-  }, [items])
+  }, [items, topLevelNames])
 
   const filtered = useMemo(() => {
     let rows = items
@@ -70,7 +91,10 @@ export default function BoqTable({ projectId }: { projectId: string }) {
           (r.item_code ?? '').toLowerCase().includes(q)
       )
     }
-    if (chapterFilter !== 'all') rows = rows.filter(r => (r.chapter_id ?? '') === chapterFilter)
+    // Filter by top-level chapter prefix
+    if (chapterFilter !== 'all') {
+      rows = rows.filter(r => topLevel(r.chapter_id) === chapterFilter)
+    }
     const min = parseFloat(minPrice)
     const max = parseFloat(maxPrice)
     if (!isNaN(min)) rows = rows.filter(r => effectiveTotal(r) >= min)
@@ -85,20 +109,21 @@ export default function BoqTable({ projectId }: { projectId: string }) {
     })
   }, [items, search, chapterFilter, minPrice, maxPrice, sortField, sortDir])
 
+  // Summary grouped by top-level chapter, summing all sub-items
   const chapterSummary = useMemo(() => {
     const map = new Map<string, { name: string; count: number; total: number }>()
     for (const item of filtered) {
-      const key = item.chapter_id ?? '__none__'
-      const name = item.chapter_name ?? item.chapter_id ?? 'Uncategorised'
-      const entry = map.get(key) ?? { name, count: 0, total: 0 }
+      const tl = topLevel(item.chapter_id) || '__none__'
+      const name = topLevelNames.get(tl) ?? item.chapter_name ?? tl ?? 'Uncategorised'
+      const entry = map.get(tl) ?? { name, count: 0, total: 0 }
       entry.count++
       entry.total += effectiveTotal(item)
-      map.set(key, entry)
+      map.set(tl, entry)
     }
     return Array.from(map.entries())
       .map(([id, v]) => ({ id, ...v }))
       .sort((a, b) => a.id.localeCompare(b.id))
-  }, [filtered])
+  }, [filtered, topLevelNames])
 
   const grandTotal = chapterSummary.reduce((s, c) => s + c.total, 0)
 
@@ -140,7 +165,7 @@ export default function BoqTable({ projectId }: { projectId: string }) {
     <div>
       <div style={{ marginBottom: '1rem' }}>
         <h2 style={{ margin: '0 0 .25rem', fontSize: '1.1rem', fontWeight: 600, color: '#0f172a' }}>Bill of Quantities</h2>
-        <p style={{ margin: 0, fontSize: '.85rem', color: '#64748b' }}>{items.length} line items · {chapters.length} chapters</p>
+        <p style={{ margin: 0, fontSize: '.85rem', color: '#64748b' }}>{items.length} line items · {topLevelChapters.length} chapters</p>
       </div>
 
       {/* Filters */}
@@ -154,8 +179,8 @@ export default function BoqTable({ projectId }: { projectId: string }) {
           />
           <select style={inp} value={chapterFilter} onChange={e => setChapterFilter(e.target.value)}>
             <option value="all">All chapters</option>
-            {chapters.map(([id, name]) => (
-              <option key={id} value={id}>{id ? `${id} – ` : ''}{name}</option>
+            {topLevelChapters.map(([id, name]) => (
+              <option key={id} value={id}>{id} – {name}</option>
             ))}
           </select>
           <input style={{ ...inp, width: '110px' }} placeholder="Min total (€)" value={minPrice} onChange={e => setMinPrice(e.target.value)} type="number" />
@@ -186,7 +211,7 @@ export default function BoqTable({ projectId }: { projectId: string }) {
                   <tr key={ch.id} style={{ cursor: 'pointer' }} onClick={() => setChapterFilter(chapterFilter === ch.id ? 'all' : ch.id)}>
                     <td style={{ ...td(), fontWeight: 500 }}>
                       {chapterFilter === ch.id && <span style={{ color: '#2563eb', marginRight: '.4rem' }}>▶</span>}
-                      {ch.id ? `${ch.id} – ` : ''}{ch.name}
+                      {ch.id !== '__none__' ? `${ch.id} – ` : ''}{ch.name}
                     </td>
                     <td style={td(true, true)}>{ch.count}</td>
                     <td style={{ ...td(true), fontWeight: 500 }}>{fmt(ch.total)}</td>
@@ -204,7 +229,7 @@ export default function BoqTable({ projectId }: { projectId: string }) {
               </tfoot>
             </table>
           </div>
-          <p style={{ margin: '.75rem 0 0', fontSize: '.78rem', color: '#94a3b8' }}>Click a chapter row to filter the table below.</p>
+          <p style={{ margin: '.75rem 0 0', fontSize: '.78rem', color: '#94a3b8' }}>Click a chapter row to filter the table below by that chapter (includes all sub-chapters).</p>
         </div>
       )}
 
@@ -237,7 +262,11 @@ export default function BoqTable({ projectId }: { projectId: string }) {
                     onMouseEnter={e => (e.currentTarget.style.background = '#f8fafc')}
                     onMouseLeave={e => (e.currentTarget.style.background = 'white')}>
                     <td style={{ ...td(), color: '#64748b', fontSize: '.78rem', whiteSpace: 'nowrap' }}>
-                      {item.chapter_id && <span style={{ background: '#eff6ff', color: '#1d4ed8', padding: '.15rem .45rem', borderRadius: '4px', fontWeight: 600 }}>{item.chapter_id}</span>}
+                      {item.chapter_id && (
+                        <span style={{ background: '#eff6ff', color: '#1d4ed8', padding: '.15rem .45rem', borderRadius: '4px', fontWeight: 600 }}>
+                          {item.chapter_id}
+                        </span>
+                      )}
                     </td>
                     <td style={{ ...td(), color: '#64748b', fontSize: '.78rem', whiteSpace: 'nowrap' }}>{item.item_code ?? '—'}</td>
                     <td style={td()}>{item.description}</td>
