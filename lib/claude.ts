@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import type { MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/messages'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
@@ -6,7 +7,7 @@ const RETRYABLE_STATUSES = new Set([529, 503, 502, 500])
 const MAX_ATTEMPTS = 4
 
 export async function claudeCreate(
-  params: Parameters<typeof anthropic.messages.create>[0]
+  params: MessageCreateParamsNonStreaming
 ): Promise<Anthropic.Message> {
   let lastError: unknown
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
