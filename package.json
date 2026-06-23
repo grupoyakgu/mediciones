@@ -13,11 +13,14 @@
     "@types/node-telegram-bot-api": "^0.64.15",
     "next": "14.2.35",
     "node-telegram-bot-api": "^1.1.0",
+    "pdf-parse": "^1.1.1",
     "react": "^18",
-    "react-dom": "^18"
+    "react-dom": "^18",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/pdf-parse": "^1.1.4",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "eslint": "^8",
