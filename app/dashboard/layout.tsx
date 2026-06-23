@@ -1,53 +1,34 @@
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
-import LogoutButton from './LogoutButton'
-
-const NAV_ITEMS = [
-  { href: '/dashboard', label: '📊 Overview' },
-  { href: '/dashboard/invoices', label: '🧾 Invoices' },
-  { href: '/dashboard/alerts', label: '🚨 Alerts' },
-  { href: '/dashboard/settings', label: '⚙️ Settings' },
-]
+import { createServerClient } from '@supabase/ssr'
+import { cookies } from 'next/headers'
+import { redirect } from 'next/navigation'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const cookieStore = cookies()
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll: () => cookieStore.getAll(),
+        setAll: (toSet: { name: string; value: string; options: Parameters<typeof cookieStore.set>[2] }[]) => {
+          toSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options))
+        }
+      }
+    }
+  )
+
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) redirect('/login')
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', fontFamily: 'system-ui, sans-serif' }}>
-      <nav style={{
-        width: '240px', background: '#0f172a', color: 'white',
-        display: 'flex', flexDirection: 'column', flexShrink: 0
-      }}>
-        <div style={{ padding: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-          <div style={{ fontSize: '1rem', fontWeight: 700 }}>BOQ Dashboard</div>
-          <div style={{ fontSize: '.72rem', color: '#64748b', marginTop: '.25rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {user.email}
-          </div>
-        </div>
-        <div style={{ flex: 1, paddingTop: '.75rem' }}>
-          {NAV_ITEMS.map(item => (
-            <Link
-              key={item.href}
-              href={item.href}
-              style={{
-                display: 'block', padding: '.625rem 1.5rem',
-                color: '#94a3b8', textDecoration: 'none', fontSize: '.875rem'
-              }}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </div>
-        <div style={{ padding: '1.5rem' }}>
-          <LogoutButton />
-        </div>
-      </nav>
-      <main style={{ flex: 1, padding: '2rem', background: '#f8fafc', overflowY: 'auto', minHeight: '100vh' }}>
-        {children}
-      </main>
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center gap-4">
+        <Link href="/dashboard" className="text-xl font-bold text-blue-600">📊 Mediciones</Link>
+        <span className="text-gray-300">|</span>
+        <Link href="/dashboard" className="text-sm text-gray-600 hover:text-blue-600">Projects</Link>
+      </header>
+      <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>
     </div>
   )
 }
