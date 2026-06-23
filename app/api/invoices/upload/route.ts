@@ -89,14 +89,18 @@ export async function POST(req: NextRequest) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    const content = await parseFile(buffer, file.type, file.name)
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+    const isPdf = ext === 'pdf' || file.type === 'application/pdf'
 
-    const message = await claudeCreate({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 8192,
-      messages: [{
-        role: 'user',
-        content: `Extract invoice data from this document and return ONLY a raw JSON object with no markdown formatting.
+    // Build the message content — PDFs go in as base64 documents, others as parsed text
+    const promptText = `Extract invoice/certification data from this document and return ONLY a raw JSON object with no markdown formatting.
+
+This may be a Spanish construction "Certificación" (payment certificate). In that case:
+- invoice_number = the certification number (e.g. "4" for "Certificación Nº 4")
+- supplier = contractor company name
+- invoice_date = date on the document (YYYY-MM-DD)
+- total_amount = the NET amount due for this certificate (TOTAL CERTIFICACIÓN SIN IVA, NOT the cumulative total)
+- items = one item per chapter (Capítulo), with description = chapter name, total_amount = chapter total
 
 Return format:
 {
@@ -117,11 +121,25 @@ Return format:
 }
 
 Spanish column names: Descripción/Concepto=description, Ud/Unidad=unit, Cantidad/Medición=quantity, Precio/P.U.=unit_price, Importe/Total=total_amount.
-Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
+Return ONLY the raw JSON object starting with {, no code blocks, no explanation.`
 
-Document:
-${content}`
-      }]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let messageContent: any[]
+    if (isPdf) {
+      messageContent = [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
+        { type: 'text', text: promptText },
+      ]
+    } else {
+      const content = await parseFile(buffer, file.type, file.name)
+      messageContent = [{ type: 'text', text: `${promptText}\n\nDocument:\n${content}` }]
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const message = await claudeCreate({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 8192,
+      messages: [{ role: 'user', content: messageContent as any }]
     })
 
     const rawText = message.content[0].type === 'text' ? message.content[0].text : ''
