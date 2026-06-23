@@ -133,13 +133,18 @@ export async function POST(req: NextRequest) {
           return
         }
 
+        // Delete existing BOQ items for this project first
+        send({ phase: 'clearing' })
+        const { error: delError } = await supabase
+          .from('boq_items')
+          .delete()
+          .eq('project_id', projectId)
+        if (delError) throw new Error('Failed to clear existing BOQ: ' + delError.message)
+
         send({ phase: 'importing', total: items.length })
 
-        // Delete existing BOQ items
-        await supabase.from('boq_items').delete().eq('project_id', projectId)
-
-        // Insert in batches, streaming progress
-        const BATCH = 50
+        // Insert in batches, streaming progress after each batch
+        const BATCH = 100
         let imported = 0
 
         for (let i = 0; i < items.length; i += BATCH) {

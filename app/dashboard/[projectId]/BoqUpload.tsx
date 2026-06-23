@@ -8,7 +8,15 @@ interface Props {
   onSuccess: () => void
 }
 
-type Phase = 'idle' | 'sending' | 'parsing' | 'importing'
+type Phase = 'idle' | 'sending' | 'parsing' | 'clearing' | 'importing'
+
+const PHASE_LABEL: Record<Phase, string> = {
+  idle: '',
+  sending: 'Sending file…',
+  parsing: 'Reading and parsing file…',
+  clearing: 'Clearing previous BOQ data…',
+  importing: '',
+}
 
 export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -57,8 +65,7 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
 
     try {
       const res = await fetch('/api/boq/upload', { method: 'POST', body: formData })
-
-      if (!res.body) throw new Error('No response body')
+      if (!res.body) throw new Error('No response body from server')
 
       setPhase('parsing')
 
@@ -84,13 +91,15 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
             setPhase('idle')
             return
           }
+          if (msg.phase === 'clearing') {
+            setPhase('clearing')
+          }
           if (msg.phase === 'importing') {
             setPhase('importing')
             setTotal(Number(msg.total) || 0)
           }
           if (msg.imported != null) {
             setImported(Number(msg.imported))
-            setTotal(Number(msg.total) || 0)
           }
           if (msg.done) {
             setResult({ ok: true, msg: `${msg.count} rows imported successfully.` })
@@ -101,11 +110,8 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
         }
       }
 
-      // Stream ended without a done message
-      if (phase !== 'idle') {
-        setResult({ ok: false, msg: 'Upload ended unexpectedly.' })
-        setPhase('idle')
-      }
+      setResult({ ok: false, msg: 'Upload ended unexpectedly.' })
+      setPhase('idle')
     } catch (err) {
       setResult({ ok: false, msg: String(err) })
       setPhase('idle')
@@ -113,13 +119,7 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
   }
 
   const progress = total > 0 ? Math.round((imported / total) * 100) : 0
-
-  function phaseLabel() {
-    if (phase === 'sending') return 'Sending file…'
-    if (phase === 'parsing') return 'Parsing file…'
-    if (phase === 'importing') return `Importing rows… ${imported} / ${total}`
-    return ''
-  }
+  const indeterminate = phase !== 'importing'
 
   return (
     <div style={{ marginBottom: '1.5rem' }}>
@@ -149,34 +149,48 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
       </button>
 
       {uploading && (
-        <div style={{ marginTop: '0.75rem', maxWidth: 420 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#6b7280', marginBottom: '0.3rem' }}>
-            <span>{phaseLabel()}</span>
-            {phase === 'importing' && total > 0 && <span>{progress}%</span>}
+        <div style={{ marginTop: '0.75rem', maxWidth: 440 }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            fontSize: '0.8rem',
+            color: phase === 'clearing' ? '#b45309' : '#6b7280',
+            marginBottom: '0.3rem',
+            fontWeight: phase === 'clearing' ? 600 : 400,
+          }}>
+            <span>
+              {phase === 'importing'
+                ? `Importing rows… ${imported.toLocaleString()} / ${total.toLocaleString()}`
+                : PHASE_LABEL[phase]}
+            </span>
+            {phase === 'importing' && total > 0 && (
+              <span>{progress}%</span>
+            )}
           </div>
+
           <div style={{ height: 7, background: '#e5e7eb', borderRadius: 999, overflow: 'hidden' }}>
-            {phase === 'importing' && total > 0 ? (
+            {indeterminate ? (
+              <div style={{
+                height: '100%',
+                width: '35%',
+                background: phase === 'clearing' ? '#f59e0b' : '#93c5fd',
+                borderRadius: 999,
+                animation: 'boq-slide 1.1s ease-in-out infinite',
+              }} />
+            ) : (
               <div style={{
                 height: '100%',
                 width: `${progress}%`,
                 background: '#2563eb',
                 borderRadius: 999,
-                transition: 'width 0.2s ease',
-              }} />
-            ) : (
-              /* indeterminate stripe while sending/parsing */
-              <div style={{
-                height: '100%',
-                width: '40%',
-                background: '#93c5fd',
-                borderRadius: 999,
-                animation: 'boq-slide 1.2s ease-in-out infinite',
+                transition: 'width 0.15s ease',
               }} />
             )}
           </div>
+
           <style>{`
             @keyframes boq-slide {
-              0%   { margin-left: -40%; }
+              0%   { margin-left: -35%; }
               100% { margin-left: 100%; }
             }
           `}</style>
@@ -197,10 +211,11 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
         </p>
       )}
 
+      {/* Confirmation modal — shown when a BOQ already exists */}
       {showConfirm && (
         <div style={{
           position: 'fixed', inset: 0,
-          background: 'rgba(0,0,0,0.4)',
+          background: 'rgba(0,0,0,0.45)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           zIndex: 50,
         }}>
@@ -208,28 +223,44 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
             background: '#fff',
             borderRadius: 12,
             padding: '2rem',
-            maxWidth: 420,
+            maxWidth: 440,
             width: '90%',
-            boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
           }}>
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.5rem', color: '#111827' }}>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.75rem', color: '#111827' }}>
               Replace existing BOQ?
             </h3>
-            <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '1.5rem', lineHeight: 1.6 }}>
-              This project already has a BOQ loaded. Uploading a new file will{' '}
-              <strong style={{ color: '#b91c1c' }}>permanently delete all existing BOQ items</strong>{' '}
-              and replace them with the new file. This cannot be undone.
+
+            <div style={{
+              background: '#fef3c7',
+              border: '1px solid #fcd34d',
+              borderRadius: 8,
+              padding: '0.75rem 1rem',
+              marginBottom: '1.25rem',
+              fontSize: '0.875rem',
+              color: '#92400e',
+              lineHeight: 1.6,
+            }}>
+              <strong>Warning:</strong> All existing BOQ items for this project will be
+              permanently deleted before the new file is imported. This cannot be undone.
+            </div>
+
+            <p style={{ fontSize: '0.875rem', color: '#374151', marginBottom: '1.5rem', lineHeight: 1.6 }}>
+              Do you want to continue and replace the current BOQ with{' '}
+              <strong>{pendingFile?.name}</strong>?
             </p>
+
             <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
               <button
                 onClick={cancelReplace}
                 style={{
-                  padding: '0.5rem 1rem',
+                  padding: '0.5rem 1.1rem',
                   border: '1px solid #d1d5db',
                   borderRadius: 6,
                   background: '#fff',
                   cursor: 'pointer',
                   fontSize: '0.875rem',
+                  color: '#374151',
                 }}
               >
                 Cancel
@@ -237,17 +268,17 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
               <button
                 onClick={confirmReplace}
                 style={{
-                  padding: '0.5rem 1rem',
+                  padding: '0.5rem 1.1rem',
                   background: '#dc2626',
                   color: '#fff',
                   border: 'none',
                   borderRadius: 6,
                   cursor: 'pointer',
                   fontSize: '0.875rem',
-                  fontWeight: 500,
+                  fontWeight: 600,
                 }}
               >
-                Yes, replace BOQ
+                Yes, delete and replace
               </button>
             </div>
           </div>
