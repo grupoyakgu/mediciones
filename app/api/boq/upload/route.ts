@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import * as XLSX from 'xlsx'
 
@@ -19,10 +19,6 @@ function toNum(v: unknown): number | null {
   return isNaN(n) ? null : n
 }
 
-/**
- * Parse an XLSX/XLS workbook directly.
- * Expects columns: A=code, B=type(Capítulo|Partida), C=unit, D=description, E=qty, F=unit_price, G=total
- */
 function parseXlsx(buffer: ArrayBuffer): BoqRow[] {
   const workbook = XLSX.read(buffer, { type: 'array' })
   const sheet = workbook.Sheets[workbook.SheetNames[0]]
@@ -44,10 +40,9 @@ function parseXlsx(buffer: ArrayBuffer): BoqRow[] {
       chapterNames.set(code, desc)
     } else if (nat === 'Partida') {
       const topChapter = code.split('.')[0]
-      const chapterName = chapterNames.get(topChapter) ?? ''
       items.push({
         chapter_id: code,
-        chapter_name: chapterName,
+        chapter_name: chapterNames.get(topChapter) ?? '',
         item_code: code,
         description: desc,
         unit,
@@ -61,10 +56,6 @@ function parseXlsx(buffer: ArrayBuffer): BoqRow[] {
   return items
 }
 
-/**
- * Parse a CSV/text BOQ using the same column convention as the XLSX parser.
- * Falls back to a best-effort line-by-line heuristic for other formats.
- */
 function parseCsv(text: string): BoqRow[] {
   const lines = text.split(/\r?\n/)
   const chapterNames = new Map<string, string>()
@@ -83,10 +74,9 @@ function parseCsv(text: string): BoqRow[] {
       chapterNames.set(code, desc)
     } else if (nat === 'Partida') {
       const topChapter = code.split('.')[0]
-      const chapterName = chapterNames.get(topChapter) ?? ''
       items.push({
         chapter_id: code,
-        chapter_name: chapterName,
+        chapter_name: chapterNames.get(topChapter) ?? '',
         item_code: code,
         description: desc,
         unit,
@@ -101,60 +91,95 @@ function parseCsv(text: string): BoqRow[] {
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    const formData = await req.formData()
-    const file = formData.get('file') as File | null
-    const projectId = formData.get('projectId') as string | null
+  const enc = new TextEncoder()
 
-    if (!file || !projectId) {
-      return NextResponse.json({ error: 'Missing file or projectId' }, { status: 400 })
-    }
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (data: Record<string, unknown>) =>
+        controller.enqueue(enc.encode(JSON.stringify(data) + '\n'))
 
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    )
+      try {
+        const formData = await req.formData()
+        const file = formData.get('file') as File | null
+        const projectId = formData.get('projectId') as string | null
 
-    const filename = file.name.toLowerCase()
-    let items: BoqRow[] = []
+        if (!file || !projectId) {
+          send({ error: 'Missing file or projectId' })
+          controller.close()
+          return
+        }
 
-    if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
-      const buffer = await file.arrayBuffer()
-      items = parseXlsx(buffer)
-    } else {
-      const text = await file.text()
-      items = parseCsv(text)
-    }
+        const supabase = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+        )
 
-    if (items.length === 0) {
-      return NextResponse.json({ error: 'No BOQ items found in file. Check that column B contains "Partida" or "Capítulo".' }, { status: 422 })
-    }
+        // Parse file
+        send({ phase: 'parsing' })
+        const filename = file.name.toLowerCase()
+        let items: BoqRow[] = []
 
-    // Delete existing BOQ for this project before inserting
-    await supabase.from('boq_items').delete().eq('project_id', projectId)
+        if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
+          const buffer = await file.arrayBuffer()
+          items = parseXlsx(buffer)
+        } else {
+          const text = await file.text()
+          items = parseCsv(text)
+        }
 
-    const BATCH = 500
-    for (let i = 0; i < items.length; i += BATCH) {
-      const batch = items.slice(i, i + BATCH).map((item) => ({
-        project_id: projectId,
-        chapter_id: item.chapter_id,
-        chapter_name: item.chapter_name,
-        item_code: item.item_code,
-        description: item.description,
-        unit: item.unit,
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        total_amount: item.total_amount,
-      }))
-      const { error } = await supabase.from('boq_items').insert(batch)
-      if (error) throw new Error(error.message)
-    }
+        if (items.length === 0) {
+          send({ error: 'No BOQ items found. Check that column B contains "Partida" or "Capítulo".' })
+          controller.close()
+          return
+        }
 
-    await supabase.from('projects').update({ boq_uploaded: true }).eq('id', projectId)
+        send({ phase: 'importing', total: items.length })
 
-    return NextResponse.json({ success: true, count: items.length })
-  } catch (err) {
-    console.error('[boq/upload]', err)
-    return NextResponse.json({ error: String(err) }, { status: 500 })
-  }
+        // Delete existing BOQ items
+        await supabase.from('boq_items').delete().eq('project_id', projectId)
+
+        // Insert in batches, streaming progress
+        const BATCH = 50
+        let imported = 0
+
+        for (let i = 0; i < items.length; i += BATCH) {
+          const batch = items.slice(i, i + BATCH).map((item) => ({
+            project_id: projectId,
+            chapter_id: item.chapter_id,
+            chapter_name: item.chapter_name,
+            item_code: item.item_code,
+            description: item.description,
+            unit: item.unit,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            total_amount: item.total_amount,
+          }))
+
+          const { error } = await supabase.from('boq_items').insert(batch)
+          if (error) throw new Error(error.message)
+
+          imported += batch.length
+          send({ imported, total: items.length })
+        }
+
+        await supabase.from('projects').update({ boq_uploaded: true }).eq('id', projectId)
+        send({ done: true, count: imported })
+      } catch (err) {
+        console.error('[boq/upload]', err)
+        try {
+          controller.enqueue(enc.encode(JSON.stringify({ error: String(err) }) + '\n'))
+        } catch { /* stream already closed */ }
+      } finally {
+        controller.close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson',
+      'Cache-Control': 'no-cache',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  })
 }

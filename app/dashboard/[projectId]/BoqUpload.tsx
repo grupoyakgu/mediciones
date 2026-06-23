@@ -8,14 +8,18 @@ interface Props {
   onSuccess: () => void
 }
 
+type Phase = 'idle' | 'sending' | 'parsing' | 'importing'
+
 export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
-  const [uploading, setUploading] = useState(false)
-  const [progress, setProgress] = useState(0)
-  const [phase, setPhase] = useState<'uploading' | 'processing'>('uploading')
+  const [phase, setPhase] = useState<Phase>('idle')
+  const [imported, setImported] = useState(0)
+  const [total, setTotal] = useState(0)
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null)
+
+  const uploading = phase !== 'idle'
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -41,64 +45,80 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
     setPendingFile(null)
   }
 
-  function startUpload(file: File) {
-    setUploading(true)
-    setProgress(0)
-    setPhase('uploading')
+  async function startUpload(file: File) {
+    setPhase('sending')
+    setImported(0)
+    setTotal(0)
     setResult(null)
 
     const formData = new FormData()
     formData.append('file', file)
     formData.append('projectId', projectId)
 
-    const xhr = new XMLHttpRequest()
-    let interval: ReturnType<typeof setInterval> | undefined
+    try {
+      const res = await fetch('/api/boq/upload', { method: 'POST', body: formData })
 
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-        setProgress(Math.round((e.loaded / e.total) * 30))
-      }
-    }
+      if (!res.body) throw new Error('No response body')
 
-    xhr.upload.onload = () => {
-      setPhase('processing')
-      let pct = 30
-      interval = setInterval(() => {
-        pct = Math.min(95, pct + Math.random() * 3)
-        setProgress(Math.round(pct))
-      }, 600)
-    }
+      setPhase('parsing')
 
-    xhr.onload = () => {
-      if (interval) clearInterval(interval)
-      setProgress(100)
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const data = JSON.parse(xhr.responseText)
-          setResult({ ok: true, msg: `BOQ loaded: ${data.count ?? '?'} items imported.` })
-        } catch {
-          setResult({ ok: true, msg: 'BOQ uploaded successfully.' })
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          let msg: Record<string, unknown>
+          try { msg = JSON.parse(line) } catch { continue }
+
+          if (msg.error) {
+            setResult({ ok: false, msg: String(msg.error) })
+            setPhase('idle')
+            return
+          }
+          if (msg.phase === 'importing') {
+            setPhase('importing')
+            setTotal(Number(msg.total) || 0)
+          }
+          if (msg.imported != null) {
+            setImported(Number(msg.imported))
+            setTotal(Number(msg.total) || 0)
+          }
+          if (msg.done) {
+            setResult({ ok: true, msg: `${msg.count} rows imported successfully.` })
+            setPhase('idle')
+            onSuccess()
+            return
+          }
         }
-        onSuccess()
-      } else {
-        try {
-          const data = JSON.parse(xhr.responseText)
-          setResult({ ok: false, msg: data.error ?? 'Upload failed.' })
-        } catch {
-          setResult({ ok: false, msg: 'Upload failed.' })
-        }
       }
-      setUploading(false)
-    }
 
-    xhr.onerror = () => {
-      if (interval) clearInterval(interval)
-      setResult({ ok: false, msg: 'Network error during upload.' })
-      setUploading(false)
+      // Stream ended without a done message
+      if (phase !== 'idle') {
+        setResult({ ok: false, msg: 'Upload ended unexpectedly.' })
+        setPhase('idle')
+      }
+    } catch (err) {
+      setResult({ ok: false, msg: String(err) })
+      setPhase('idle')
     }
+  }
 
-    xhr.open('POST', '/api/boq/upload')
-    xhr.send(formData)
+  const progress = total > 0 ? Math.round((imported / total) * 100) : 0
+
+  function phaseLabel() {
+    if (phase === 'sending') return 'Sending file…'
+    if (phase === 'parsing') return 'Parsing file…'
+    if (phase === 'importing') return `Importing rows… ${imported} / ${total}`
+    return ''
   }
 
   return (
@@ -129,26 +149,43 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
       </button>
 
       {uploading && (
-        <div style={{ marginTop: '0.75rem', maxWidth: 400 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.25rem' }}>
-            <span>{phase === 'uploading' ? 'Uploading file…' : 'Processing with AI…'}</span>
-            <span>{progress}%</span>
+        <div style={{ marginTop: '0.75rem', maxWidth: 420 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#6b7280', marginBottom: '0.3rem' }}>
+            <span>{phaseLabel()}</span>
+            {phase === 'importing' && total > 0 && <span>{progress}%</span>}
           </div>
-          <div style={{ height: 6, background: '#e5e7eb', borderRadius: 999, overflow: 'hidden' }}>
-            <div style={{
-              height: '100%',
-              width: `${progress}%`,
-              background: phase === 'processing' ? '#7c3aed' : '#2563eb',
-              borderRadius: 999,
-              transition: 'width 0.4s ease',
-            }} />
+          <div style={{ height: 7, background: '#e5e7eb', borderRadius: 999, overflow: 'hidden' }}>
+            {phase === 'importing' && total > 0 ? (
+              <div style={{
+                height: '100%',
+                width: `${progress}%`,
+                background: '#2563eb',
+                borderRadius: 999,
+                transition: 'width 0.2s ease',
+              }} />
+            ) : (
+              /* indeterminate stripe while sending/parsing */
+              <div style={{
+                height: '100%',
+                width: '40%',
+                background: '#93c5fd',
+                borderRadius: 999,
+                animation: 'boq-slide 1.2s ease-in-out infinite',
+              }} />
+            )}
           </div>
+          <style>{`
+            @keyframes boq-slide {
+              0%   { margin-left: -40%; }
+              100% { margin-left: 100%; }
+            }
+          `}</style>
         </div>
       )}
 
       {result && (
         <p style={{
-          marginTop: '0.5rem',
+          marginTop: '0.6rem',
           fontSize: '0.875rem',
           color: result.ok ? '#166534' : '#991b1b',
           background: result.ok ? '#dcfce7' : '#fee2e2',
