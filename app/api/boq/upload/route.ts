@@ -1,6 +1,8 @@
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import * as XLSX from 'xlsx'
+
+export const maxDuration = 60
 
 interface BoqRow {
   chapter_id: string
@@ -15,7 +17,8 @@ interface BoqRow {
 
 function toNum(v: unknown): number | null {
   if (v == null || v === '') return null
-  const n = Number(v)
+  const s = String(v).replace(/,/g, '')
+  const n = Number(s)
   return isNaN(n) ? null : n
 }
 
@@ -91,100 +94,72 @@ function parseCsv(text: string): BoqRow[] {
 }
 
 export async function POST(req: NextRequest) {
-  const enc = new TextEncoder()
+  try {
+    const formData = await req.formData()
+    const file = formData.get('file') as File | null
+    const projectId = formData.get('projectId') as string | null
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (data: Record<string, unknown>) =>
-        controller.enqueue(enc.encode(JSON.stringify(data) + '\n'))
+    if (!file || !projectId) {
+      return NextResponse.json({ error: 'Missing file or projectId' }, { status: 400 })
+    }
 
-      try {
-        const formData = await req.formData()
-        const file = formData.get('file') as File | null
-        const projectId = formData.get('projectId') as string | null
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    )
 
-        if (!file || !projectId) {
-          send({ error: 'Missing file or projectId' })
-          controller.close()
-          return
-        }
+    const filename = file.name.toLowerCase()
+    let items: BoqRow[] = []
 
-        const supabase = createClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-        )
+    if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
+      const buffer = await file.arrayBuffer()
+      items = parseXlsx(buffer)
+    } else {
+      const text = await file.text()
+      items = parseCsv(text)
+    }
 
-        // Parse file
-        send({ phase: 'parsing' })
-        const filename = file.name.toLowerCase()
-        let items: BoqRow[] = []
+    if (items.length === 0) {
+      return NextResponse.json({ error: 'No BOQ items found. Check that column B contains "Partida" or "Capítulo".' }, { status: 400 })
+    }
 
-        if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
-          const buffer = await file.arrayBuffer()
-          items = parseXlsx(buffer)
-        } else {
-          const text = await file.text()
-          items = parseCsv(text)
-        }
+    const { error: delError } = await supabase
+      .from('boq_items')
+      .delete()
+      .eq('project_id', projectId)
+    if (delError) return NextResponse.json({ error: 'Failed to clear existing BOQ: ' + delError.message }, { status: 500 })
 
-        if (items.length === 0) {
-          send({ error: 'No BOQ items found. Check that column B contains "Partida" or "Capítulo".' })
-          controller.close()
-          return
-        }
+    const BATCH = 100
+    let imported = 0
 
-        // Delete existing BOQ items for this project first
-        send({ phase: 'clearing' })
-        const { error: delError } = await supabase
-          .from('boq_items')
-          .delete()
-          .eq('project_id', projectId)
-        if (delError) throw new Error('Failed to clear existing BOQ: ' + delError.message)
+    for (let i = 0; i < items.length; i += BATCH) {
+      const batch = items.slice(i, i + BATCH).map((item) => ({
+        project_id: projectId,
+        chapter_id: item.chapter_id,
+        chapter_name: item.chapter_name,
+        item_code: item.item_code,
+        description: item.description,
+        unit: item.unit,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        total_amount: item.total_amount,
+      }))
 
-        send({ phase: 'importing', total: items.length })
+      const { error } = await supabase.from('boq_items').insert(batch)
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-        // Insert in batches, streaming progress after each batch
-        const BATCH = 100
-        let imported = 0
+      imported += batch.length
+    }
 
-        for (let i = 0; i < items.length; i += BATCH) {
-          const batch = items.slice(i, i + BATCH).map((item) => ({
-            project_id: projectId,
-            chapter_id: item.chapter_id,
-            chapter_name: item.chapter_name,
-            item_code: item.item_code,
-            description: item.description,
-            unit: item.unit,
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            total_amount: item.total_amount,
-          }))
+    const { error: updateError } = await supabase
+      .from('projects')
+      .update({ boq_uploaded: true })
+      .eq('id', projectId)
+    if (updateError) return NextResponse.json({ error: 'Failed to mark BOQ as uploaded: ' + updateError.message }, { status: 500 })
 
-          const { error } = await supabase.from('boq_items').insert(batch)
-          if (error) throw new Error(error.message)
-
-          imported += batch.length
-          send({ imported, total: items.length })
-        }
-
-        await supabase.from('projects').update({ boq_uploaded: true }).eq('id', projectId)
-        send({ done: true, count: imported })
-      } catch (err) {
-        console.error('[boq/upload]', err)
-        try {
-          controller.enqueue(enc.encode(JSON.stringify({ error: String(err) }) + '\n'))
-        } catch { /* stream already closed */ }
-      } finally {
-        controller.close()
-      }
-    },
-  })
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'application/x-ndjson',
-      'Cache-Control': 'no-cache',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  })
+    return NextResponse.json({ count: imported })
+  } catch (err) {
+    console.error('[boq/upload]', err)
+    return NextResponse.json({ error: String(err) }, { status: 500 })
+  }
 }

@@ -8,14 +8,11 @@ interface Props {
   onSuccess: () => void
 }
 
-type Phase = 'idle' | 'sending' | 'parsing' | 'clearing' | 'importing'
+type Phase = 'idle' | 'uploading'
 
 const PHASE_LABEL: Record<Phase, string> = {
   idle: '',
-  sending: 'Sending file…',
-  parsing: 'Reading and parsing file…',
-  clearing: 'Clearing previous BOQ data…',
-  importing: '',
+  uploading: 'Uploading and importing…',
 }
 
 export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) {
@@ -23,8 +20,6 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
   const [phase, setPhase] = useState<Phase>('idle')
-  const [imported, setImported] = useState(0)
-  const [total, setTotal] = useState(0)
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null)
 
   const uploading = phase !== 'idle'
@@ -54,9 +49,7 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
   }
 
   async function startUpload(file: File) {
-    setPhase('sending')
-    setImported(0)
-    setTotal(0)
+    setPhase('uploading')
     setResult(null)
 
     const formData = new FormData()
@@ -65,61 +58,22 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
 
     try {
       const res = await fetch('/api/boq/upload', { method: 'POST', body: formData })
-      if (!res.body) throw new Error('No response body from server')
+      const data = await res.json()
 
-      setPhase('parsing')
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-
-        for (const line of lines) {
-          if (!line.trim()) continue
-          let msg: Record<string, unknown>
-          try { msg = JSON.parse(line) } catch { continue }
-
-          if (msg.error) {
-            setResult({ ok: false, msg: String(msg.error) })
-            setPhase('idle')
-            return
-          }
-          if (msg.phase === 'clearing') {
-            setPhase('clearing')
-          }
-          if (msg.phase === 'importing') {
-            setPhase('importing')
-            setTotal(Number(msg.total) || 0)
-          }
-          if (msg.imported != null) {
-            setImported(Number(msg.imported))
-          }
-          if (msg.done) {
-            setResult({ ok: true, msg: `${msg.count} rows imported successfully.` })
-            setPhase('idle')
-            onSuccess()
-            return
-          }
-        }
+      if (data.error) {
+        setResult({ ok: false, msg: String(data.error) })
+        setPhase('idle')
+        return
       }
 
-      setResult({ ok: false, msg: 'Upload ended unexpectedly.' })
+      setResult({ ok: true, msg: `${data.count} rows imported successfully.` })
       setPhase('idle')
+      onSuccess()
     } catch (err) {
       setResult({ ok: false, msg: String(err) })
       setPhase('idle')
     }
   }
-
-  const progress = total > 0 ? Math.round((imported / total) * 100) : 0
-  const indeterminate = phase !== 'importing'
 
   return (
     <div style={{ marginBottom: '1.5rem' }}>
@@ -150,44 +104,18 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
 
       {uploading && (
         <div style={{ marginTop: '0.75rem', maxWidth: 440 }}>
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            fontSize: '0.8rem',
-            color: phase === 'clearing' ? '#b45309' : '#6b7280',
-            marginBottom: '0.3rem',
-            fontWeight: phase === 'clearing' ? 600 : 400,
-          }}>
-            <span>
-              {phase === 'importing'
-                ? `Importing rows… ${imported.toLocaleString()} / ${total.toLocaleString()}`
-                : PHASE_LABEL[phase]}
-            </span>
-            {phase === 'importing' && total > 0 && (
-              <span>{progress}%</span>
-            )}
+          <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: '0.3rem' }}>
+            {PHASE_LABEL[phase]}
           </div>
-
           <div style={{ height: 7, background: '#e5e7eb', borderRadius: 999, overflow: 'hidden' }}>
-            {indeterminate ? (
-              <div style={{
-                height: '100%',
-                width: '35%',
-                background: phase === 'clearing' ? '#f59e0b' : '#93c5fd',
-                borderRadius: 999,
-                animation: 'boq-slide 1.1s ease-in-out infinite',
-              }} />
-            ) : (
-              <div style={{
-                height: '100%',
-                width: `${progress}%`,
-                background: '#2563eb',
-                borderRadius: 999,
-                transition: 'width 0.15s ease',
-              }} />
-            )}
+            <div style={{
+              height: '100%',
+              width: '35%',
+              background: '#93c5fd',
+              borderRadius: 999,
+              animation: 'boq-slide 1.1s ease-in-out infinite',
+            }} />
           </div>
-
           <style>{`
             @keyframes boq-slide {
               0%   { margin-left: -35%; }
