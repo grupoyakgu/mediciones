@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 
 interface Invoice {
   id: string
@@ -53,6 +53,7 @@ export default function InvoicesPage() {
   const params = useParams()
   const projectId = params.projectId as string
   const supabase = createClient()
+  const router = useRouter()
   const fileRef = useRef<HTMLInputElement>(null)
 
   const [invoices, setInvoices] = useState<Invoice[]>([])
@@ -116,10 +117,9 @@ export default function InvoicesPage() {
     const newStatus = inv.status === 'approved' ? 'processed' : 'approved'
     await supabase.from('invoices').update({ status: newStatus }).eq('id', inv.id)
     setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: newStatus } : i))
-    // refresh detail if this invoice is selected
-    if (selectedId === inv.id) {
-      await loadDetail(inv.id, newStatus)
-    }
+    if (selectedId === inv.id) await loadDetail(inv.id, newStatus)
+    // Refresh the server-rendered overview so the KPIs update immediately
+    router.refresh()
   }
 
   async function confirmAndDelete() {
