@@ -48,11 +48,15 @@ export default function AllProjectsPage() {
   async function deleteProject() {
     if (!confirmDelete) return
     setDeleting(true)
-    // CASCADE on DB handles boq_items, invoices, invoice_items
-    await supabase.from('projects').delete().eq('id', confirmDelete.id)
+    const res = await fetch(`/api/projects?id=${confirmDelete.id}`, { method: 'DELETE' })
+    setDeleting(false)
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      alert('Delete failed: ' + (body.error ?? res.statusText))
+      return
+    }
     setProjects(prev => prev.filter(p => p.id !== confirmDelete.id))
     setConfirmDelete(null)
-    setDeleting(false)
     window.dispatchEvent(new Event('projectsChanged'))
     router.refresh()
   }
