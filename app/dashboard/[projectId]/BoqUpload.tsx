@@ -21,14 +21,16 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
   const [showConfirm, setShowConfirm] = useState(false)
   const [phase, setPhase] = useState<Phase>('idle')
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [localUploaded, setLocalUploaded] = useState(boqUploaded)
 
   const uploading = phase !== 'idle'
+  const hasBoq = localUploaded
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
     setResult(null)
-    if (boqUploaded) {
+    if (hasBoq) {
       setPendingFile(file)
       setShowConfirm(true)
     } else {
@@ -66,7 +68,9 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
         return
       }
 
-      setResult({ ok: true, msg: `${data.count} rows imported successfully.` })
+      const debugSuffix = data.boq_update_error ? ` ⚠️ DB flag error: ${data.boq_update_error}` : ''
+      setResult({ ok: true, msg: `✅ ${data.count} rows imported successfully.${debugSuffix}` })
+      setLocalUploaded(true)
       setPhase('idle')
       onSuccess()
     } catch (err) {
@@ -99,7 +103,7 @@ export default function BoqUpload({ projectId, boqUploaded, onSuccess }: Props) 
           fontWeight: 500,
         }}
       >
-        {uploading ? 'Uploading…' : boqUploaded ? 'Replace BOQ File' : 'Upload BOQ File'}
+        {uploading ? 'Uploading…' : hasBoq ? 'Replace BOQ File' : 'Upload BOQ File'}
       </button>
 
       {uploading && (

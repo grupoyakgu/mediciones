@@ -155,9 +155,11 @@ export async function POST(req: NextRequest) {
       .from('projects')
       .update({ boq_uploaded: true })
       .eq('id', projectId)
-    if (updateError) return NextResponse.json({ error: 'Failed to mark BOQ as uploaded: ' + updateError.message }, { status: 500 })
 
-    return NextResponse.json({ count: imported })
+    return NextResponse.json({
+      count: imported,
+      boq_update_error: updateError ? updateError.message : null,
+    })
   } catch (err) {
     console.error('[boq/upload]', err)
     return NextResponse.json({ error: String(err) }, { status: 500 })
