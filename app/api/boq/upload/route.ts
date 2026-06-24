@@ -187,6 +187,28 @@ export async function POST(req: NextRequest) {
       if (alertErr) console.error('[boq/upload] alert insert error:', alertErr.message)
     }
 
+    // Raise high priority alerts for duplicate item codes
+    const codeCounts = new Map<string, BoqRow[]>()
+    for (const item of items) {
+      if (!item.item_code) continue
+      const group = codeCounts.get(item.item_code) ?? []
+      group.push(item)
+      codeCounts.set(item.item_code, group)
+    }
+    const duplicates = Array.from(codeCounts.entries()).filter(([, group]) => group.length > 1)
+    await supabase.from('alerts').delete().eq('project_id', projectId).eq('type', 'boq_duplicate_code')
+    if (duplicates.length > 0) {
+      const dupAlertRows = duplicates.map(([code, group]) => ({
+        project_id:  projectId,
+        invoice_id:  null,
+        type:        'boq_duplicate_code',
+        priority:    'high',
+        description: `Duplicate BOQ item code "${code}" appears ${group.length} times (chapters: ${Array.from(new Set(group.map(i => i.chapter_name || i.chapter_id))).join(', ')})`,
+      }))
+      const { error: dupErr } = await supabase.from('alerts').insert(dupAlertRows)
+      if (dupErr) console.error('[boq/upload] duplicate alert insert error:', dupErr.message)
+    }
+
     const { error: updateError } = await supabase
       .from('projects')
       .update({ boq_file_name: file.name })
@@ -194,7 +216,7 @@ export async function POST(req: NextRequest) {
 
     if (updateError) return NextResponse.json({ error: 'BOQ imported but failed to save filename: ' + updateError.message }, { status: 500 })
 
-    return NextResponse.json({ count: imported, anomalyCount: anomalies.length })
+    return NextResponse.json({ count: imported, anomalyCount: anomalies.length, duplicateCount: duplicates.length })
   } catch (err) {
     console.error('[boq/upload]', err)
     return NextResponse.json({ error: String(err) }, { status: 500 })
