@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Telegram Task Manager",
-  description: "AI-powered task manager via Telegram",
+  title: "Yakgu Project Manager",
+  description: "Financial project manager by Grupo Yakgu",
 };
 
 export default function RootLayout({
