@@ -17,12 +17,16 @@ export default function SettingsPage() {
   const [saveMsg, setSaveMsg] = useState('')
 
   const [boqFileName, setBoqFileName] = useState<string | null>(null)
+  const [projectName, setProjectName] = useState('')
+  const [nameSaving, setNameSaving] = useState(false)
+  const [nameMsg, setNameMsg] = useState('')
 
   const load = useCallback(async () => {
     const res = await fetch('/api/projects')
     const data = await res.json()
-    const project = (data.projects ?? []).find((p: { id: string; alert_threshold_pct?: number; retention_pct?: number; email_recipients?: string[]; boq_file_name?: string }) => p.id === projectId)
+    const project = (data.projects ?? []).find((p: { id: string; name?: string; alert_threshold_pct?: number; retention_pct?: number; email_recipients?: string[]; boq_file_name?: string }) => p.id === projectId)
     if (project) {
+      setProjectName(project.name ?? '')
       setThreshold(project.alert_threshold_pct ?? 90)
       setRetentionPct(project.retention_pct ?? 10)
       setEmailsRaw((project.email_recipients ?? []).join(', '))
@@ -61,8 +65,47 @@ export default function SettingsPage() {
     setSaveMsg(data.error ? `❌ ${data.error}` : '✅ Settings saved')
   }
 
+  async function renameProject() {
+    const name = projectName.trim()
+    if (!name) return
+    setNameSaving(true)
+    setNameMsg('')
+    const res = await fetch(`/api/projects/${projectId}/settings`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    const data = await res.json()
+    setNameSaving(false)
+    setNameMsg(data.error ? `❌ ${data.error}` : '✅ Project renamed')
+    setTimeout(() => setNameMsg(''), 3000)
+  }
+
   return (
     <div className="max-w-2xl space-y-8">
+      {/* Project name */}
+      <div className="bg-white border border-gray-200 rounded-xl p-6">
+        <h2 className="text-base font-semibold text-gray-900 mb-4">Project Name</h2>
+        <div className="flex gap-3">
+          <input
+            type="text"
+            value={projectName}
+            onChange={e => setProjectName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') renameProject() }}
+            placeholder="Project name…"
+            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <button
+            onClick={renameProject}
+            disabled={nameSaving || !projectName.trim()}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 hover:bg-blue-700"
+          >
+            {nameSaving ? 'Saving…' : 'Rename'}
+          </button>
+        </div>
+        {nameMsg && <p className="mt-2 text-sm">{nameMsg}</p>}
+      </div>
+
       {/* BOQ Upload */}
       <div className="bg-white border border-gray-200 rounded-xl p-6">
         <h2 className="text-base font-semibold text-gray-900 mb-4">BOQ File</h2>
