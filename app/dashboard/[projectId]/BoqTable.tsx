@@ -13,7 +13,7 @@ interface BoqItem {
   total_amount: number | null
 }
 
-type SortField = 'description' | 'unit_price' | 'effective_total' | 'chapter'
+type SortField = 'description' | 'unit_price' | 'effective_total'
 type SortDir = 'asc' | 'desc'
 
 const fmt = (n: number | null) =>
@@ -35,12 +35,11 @@ export default function BoqTable({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null)
 
   const [search, setSearch] = useState('')
-  const [chapterFilter, setChapterFilter] = useState('all')
   const [minPrice, setMinPrice] = useState('')
   const [maxPrice, setMaxPrice] = useState('')
-  const [sortField, setSortField] = useState<SortField>('chapter')
+  const [sortField, setSortField] = useState<SortField | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>('asc')
-  const [showSummary, setShowSummary] = useState(true)
+  const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set())
 
   const loadBoq = useCallback(() => {
     let cancelled = false
@@ -50,8 +49,11 @@ export default function BoqTable({ projectId }: { projectId: string }) {
       .then(({ items: data, error: err }) => {
         if (cancelled) return
         if (err) { setError(err); setLoading(false); return }
-        setItems(data ?? [])
+        const loaded: BoqItem[] = data ?? []
+        setItems(loaded)
         setLoading(false)
+        const chapterIds = new Set(loaded.map(i => topLevel(i.chapter_id)).filter(Boolean))
+        setExpandedChapters(chapterIds)
       })
       .catch(e => { if (!cancelled) { setError(String(e)); setLoading(false) } })
     return () => { cancelled = true }
@@ -66,64 +68,66 @@ export default function BoqTable({ projectId }: { projectId: string }) {
     }
   }, [loadBoq])
 
-  const topLevelNames = useMemo(() => {
+  const chapterMeta = useMemo(() => {
     const map = new Map<string, string>()
     for (const item of items) {
-      const id = item.chapter_id ?? ''
-      if (id && !id.includes('.') && item.chapter_name) map.set(id, item.chapter_name)
+      const tl = topLevel(item.chapter_id)
+      if (tl && !map.has(tl)) map.set(tl, item.chapter_name ?? tl)
     }
     return map
   }, [items])
 
-  const topLevelChapters = useMemo(() => {
-    const seen = new Map<string, string>()
-    for (const item of items) {
-      const tl = topLevel(item.chapter_id)
-      if (tl && !seen.has(tl)) seen.set(tl, topLevelNames.get(tl) ?? tl)
-    }
-    return Array.from(seen.entries()).sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
-  }, [items, topLevelNames])
+  const chapters = useMemo(() => {
+    const q = search.toLowerCase().trim()
+    const min = parseFloat(minPrice)
+    const max = parseFloat(maxPrice)
 
-  const filtered = useMemo(() => {
-    let rows = items
-    if (search.trim()) {
-      const q = search.toLowerCase()
-      rows = rows.filter(r =>
-        r.description.toLowerCase().includes(q) ||
-        (r.chapter_name ?? '').toLowerCase().includes(q) ||
-        (r.item_code ?? '').toLowerCase().includes(q)
-      )
-    }
-    if (chapterFilter !== 'all') rows = rows.filter(r => topLevel(r.chapter_id) === chapterFilter)
-    const min = parseFloat(minPrice), max = parseFloat(maxPrice)
-    if (!isNaN(min)) rows = rows.filter(r => effectiveTotal(r) >= min)
-    if (!isNaN(max)) rows = rows.filter(r => effectiveTotal(r) <= max)
-    return rows.slice().sort((a, b) => {
-      let cmp = 0
-      if (sortField === 'description') cmp = a.description.localeCompare(b.description)
-      else if (sortField === 'unit_price') cmp = (a.unit_price ?? 0) - (b.unit_price ?? 0)
-      else if (sortField === 'effective_total') cmp = effectiveTotal(a) - effectiveTotal(b)
-      else cmp = (a.chapter_id ?? '').localeCompare(b.chapter_id ?? '', undefined, { numeric: true })
-      return sortDir === 'asc' ? cmp : -cmp
-    })
-  }, [items, search, chapterFilter, minPrice, maxPrice, sortField, sortDir])
+    let filtered = items
+    if (q) filtered = filtered.filter(r =>
+      r.description.toLowerCase().includes(q) ||
+      (r.chapter_name ?? '').toLowerCase().includes(q) ||
+      (r.item_code ?? '').toLowerCase().includes(q)
+    )
+    if (!isNaN(min)) filtered = filtered.filter(r => effectiveTotal(r) >= min)
+    if (!isNaN(max)) filtered = filtered.filter(r => effectiveTotal(r) <= max)
 
-  const chapterSummary = useMemo(() => {
-    const map = new Map<string, { name: string; count: number; total: number }>()
+    if (sortField) {
+      filtered = filtered.slice().sort((a, b) => {
+        let cmp = 0
+        if (sortField === 'description') cmp = a.description.localeCompare(b.description)
+        else if (sortField === 'unit_price') cmp = (a.unit_price ?? 0) - (b.unit_price ?? 0)
+        else if (sortField === 'effective_total') cmp = effectiveTotal(a) - effectiveTotal(b)
+        return sortDir === 'asc' ? cmp : -cmp
+      })
+    }
+
+    const map = new Map<string, BoqItem[]>()
     for (const item of filtered) {
       const tl = topLevel(item.chapter_id) || '__none__'
-      const name = topLevelNames.get(tl) ?? item.chapter_name ?? tl
-      const entry = map.get(tl) ?? { name, count: 0, total: 0 }
-      entry.count++
-      entry.total += effectiveTotal(item)
-      map.set(tl, entry)
+      if (!map.has(tl)) map.set(tl, [])
+      map.get(tl)!.push(item)
     }
-    return Array.from(map.entries())
-      .map(([id, v]) => ({ id, ...v }))
-      .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))
-  }, [filtered, topLevelNames])
 
-  const grandTotal = chapterSummary.reduce((s, c) => s + c.total, 0)
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+      .map(([id, chItems]) => ({
+        id,
+        name: chapterMeta.get(id) ?? id,
+        items: chItems,
+        subtotal: chItems.reduce((s, i) => s + effectiveTotal(i), 0),
+      }))
+  }, [items, search, minPrice, maxPrice, sortField, sortDir, chapterMeta])
+
+  const grandTotal = chapters.reduce((s, c) => s + c.subtotal, 0)
+  const totalItems = chapters.reduce((s, c) => s + c.items.length, 0)
+
+  function toggleChapter(id: string) {
+    setExpandedChapters(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
 
   function toggleSort(field: SortField) {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -131,122 +135,174 @@ export default function BoqTable({ projectId }: { projectId: string }) {
   }
   const arrow = (f: SortField) => sortField === f ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''
 
-  const card: React.CSSProperties = { background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '1.5rem', marginBottom: '1.5rem' }
-  const inp: React.CSSProperties = { padding: '.45rem .75rem', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '.85rem', outline: 'none', background: 'white' }
-  const th = (clickable = false): React.CSSProperties => ({ padding: '.625rem 1rem', textAlign: 'left', fontSize: '.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap', cursor: clickable ? 'pointer' : 'default', userSelect: 'none' })
-  const td = (right = false, muted = false): React.CSSProperties => ({ padding: '.55rem 1rem', fontSize: '.85rem', borderBottom: '1px solid #f1f5f9', textAlign: right ? 'right' : 'left', color: muted ? '#94a3b8' : '#1e293b', whiteSpace: right ? 'nowrap' : 'normal' })
-
-  if (loading) return <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0' }}>Loading BOQ…</div>
+  if (loading) return (
+    <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-sm text-gray-400">
+      Loading BOQ…
+    </div>
+  )
   if (error) return (
-    <div style={{ padding: '1.5rem', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px', color: '#dc2626' }}>
-      <p style={{ margin: '0 0 .75rem', fontWeight: 600 }}>Error loading BOQ</p>
-      <p style={{ margin: '0 0 1rem', fontSize: '.875rem', fontFamily: 'monospace', wordBreak: 'break-all' }}>{error}</p>
-      <button onClick={loadBoq} style={{ padding: '.4rem .9rem', background: '#dc2626', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '.85rem' }}>Retry</button>
+    <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+      <p className="font-semibold text-red-700 mb-2">Error loading BOQ</p>
+      <p className="text-sm font-mono text-red-600 break-all mb-4">{error}</p>
+      <button onClick={loadBoq} className="px-4 py-1.5 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700">Retry</button>
     </div>
   )
   if (items.length === 0) return (
-    <div style={{ ...card, textAlign: 'center', padding: '3rem 2rem', color: '#94a3b8', border: '2px dashed #e2e8f0' }}>
-      <div style={{ fontSize: '2rem', marginBottom: '.75rem' }}>📂</div>
-      <p style={{ margin: 0 }}>No BOQ items found. Upload a BOQ file above or go to <a href="settings" style={{ color: '#2563eb', fontWeight: 500 }}>Settings</a>.</p>
+    <div className="bg-white rounded-xl border-2 border-dashed border-gray-200 p-12 text-center text-gray-400">
+      <div className="text-3xl mb-3">📂</div>
+      <p className="text-sm">No BOQ items found. Upload a BOQ file above or go to <a href="settings" className="text-blue-600 font-medium hover:underline">Settings</a>.</p>
     </div>
   )
 
   return (
-    <div>
-      <div style={{ marginBottom: '1rem' }}>
-        <h2 style={{ margin: '0 0 .25rem', fontSize: '1.1rem', fontWeight: 600, color: '#0f172a' }}>Bill of Quantities</h2>
-        <p style={{ margin: 0, fontSize: '.85rem', color: '#64748b' }}>{items.length} line items · {topLevelChapters.length} chapters</p>
-      </div>
-
-      <div style={{ ...card, padding: '1rem 1.5rem' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.75rem', alignItems: 'center' }}>
-          <input style={{ ...inp, minWidth: '220px', flex: 1 }} placeholder="🔍  Search description, chapter or code…" value={search} onChange={e => setSearch(e.target.value)} />
-          <select style={inp} value={chapterFilter} onChange={e => setChapterFilter(e.target.value)}>
-            <option value="all">All chapters</option>
-            {topLevelChapters.map(([id, name]) => <option key={id} value={id}>{id} – {name}</option>)}
-          </select>
-          <input style={{ ...inp, width: '110px' }} placeholder="Min (€)" value={minPrice} onChange={e => setMinPrice(e.target.value)} type="number" />
-          <input style={{ ...inp, width: '110px' }} placeholder="Max (€)" value={maxPrice} onChange={e => setMaxPrice(e.target.value)} type="number" />
-          <label style={{ display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.875rem', color: '#475569', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-            <input type="checkbox" checked={showSummary} onChange={e => setShowSummary(e.target.checked)} style={{ width: '15px', height: '15px' }} />
-            Chapter summary
-          </label>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">Bill of Quantities</h2>
+          <p className="text-sm text-gray-500 mt-0.5">{items.length} line items · {chapterMeta.size} chapters</p>
         </div>
       </div>
 
-      {showSummary && (
-        <div style={card}>
-          <div style={{ fontWeight: 600, fontSize: '.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '1rem' }}>Chapter Summary</div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr>
-                <th style={th()}>Chapter</th>
-                <th style={{ ...th(), textAlign: 'right' }}>Items</th>
-                <th style={{ ...th(), textAlign: 'right' }}>Total Budget (€)</th>
-                <th style={{ ...th(), textAlign: 'right' }}>% of Total</th>
-              </tr></thead>
-              <tbody>
-                {chapterSummary.map(ch => (
-                  <tr key={ch.id} style={{ cursor: 'pointer' }} onClick={() => setChapterFilter(chapterFilter === ch.id ? 'all' : ch.id)}>
-                    <td style={{ ...td(), fontWeight: 500 }}>{chapterFilter === ch.id && <span style={{ color: '#2563eb', marginRight: '.4rem' }}>▶</span>}{ch.id !== '__none__' ? `${ch.id} – ` : ''}{ch.name}</td>
-                    <td style={td(true, true)}>{ch.count}</td>
-                    <td style={{ ...td(true), fontWeight: 500 }}>{fmt(ch.total)}</td>
-                    <td style={td(true, true)}>{grandTotal > 0 ? `${((ch.total / grandTotal) * 100).toFixed(1)}%` : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot><tr style={{ background: '#f8fafc' }}>
-                <td style={{ ...td(), fontWeight: 700, borderTop: '2px solid #e2e8f0' }}>TOTAL</td>
-                <td style={{ ...td(true, true), borderTop: '2px solid #e2e8f0' }}>{chapterSummary.reduce((s, c) => s + c.count, 0)}</td>
-                <td style={{ ...td(true), fontWeight: 700, color: '#0f172a', borderTop: '2px solid #e2e8f0' }}>{fmt(grandTotal)}</td>
-                <td style={{ ...td(true, true), borderTop: '2px solid #e2e8f0' }}>100%</td>
-              </tr></tfoot>
-            </table>
+      {/* Filter bar */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+        <div className="relative">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+          <input
+            type="text"
+            placeholder="Search by description, item code, or chapter…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-sm">✕</button>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2 items-center">
+          <input
+            type="number"
+            placeholder="Min (€)"
+            value={minPrice}
+            onChange={e => setMinPrice(e.target.value)}
+            className="w-28 text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+          />
+          <input
+            type="number"
+            placeholder="Max (€)"
+            value={maxPrice}
+            onChange={e => setMaxPrice(e.target.value)}
+            className="w-28 text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+          />
+          <div className="flex gap-2 ml-auto">
+            <button
+              onClick={() => setExpandedChapters(new Set(chapters.map(c => c.id)))}
+              className="px-3 py-1.5 text-xs border border-gray-300 rounded-lg text-blue-600 font-medium hover:bg-blue-50 transition-colors"
+            >Expand all</button>
+            <button
+              onClick={() => setExpandedChapters(new Set())}
+              className="px-3 py-1.5 text-xs border border-gray-300 rounded-lg text-gray-500 hover:bg-gray-50 transition-colors"
+            >Collapse all</button>
           </div>
-          <p style={{ margin: '.75rem 0 0', fontSize: '.78rem', color: '#94a3b8' }}>Click a chapter row to filter below (includes all sub-chapters).</p>
+        </div>
+      </div>
+
+      {/* Chapter sections */}
+      <div className="space-y-3">
+        {chapters.length === 0 ? (
+          <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-sm text-gray-400">
+            No items match the current filters.
+          </div>
+        ) : chapters.map(ch => {
+          const isOpen = expandedChapters.has(ch.id)
+          const pctOfTotal = grandTotal > 0 ? (ch.subtotal / grandTotal * 100) : 0
+
+          return (
+            <div key={ch.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <button
+                className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors text-left"
+                onClick={() => toggleChapter(ch.id)}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="text-gray-400 text-sm w-4 flex-shrink-0">{isOpen ? '▾' : '▸'}</span>
+                  <span className="font-semibold text-gray-900 text-sm">
+                    {ch.id !== '__none__' ? `${ch.id} – ` : ''}{ch.name}
+                  </span>
+                  <span className="text-xs text-gray-400 flex-shrink-0">({ch.items.length} items)</span>
+                </div>
+                <div className="flex items-center gap-6 flex-shrink-0 ml-4">
+                  <span className="text-xs text-gray-400">{pctOfTotal.toFixed(1)}% of total</span>
+                  <span className="font-semibold text-gray-900 text-sm">€{fmt(ch.subtotal)}</span>
+                </div>
+              </button>
+
+              {isOpen && (
+                <div className="border-t border-gray-100 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left font-medium text-gray-500 w-24">Code</th>
+                        <th
+                          onClick={() => toggleSort('description')}
+                          className="px-4 py-2 text-left font-medium text-gray-500 cursor-pointer select-none hover:text-gray-700"
+                        >Description{arrow('description')}</th>
+                        <th className="px-4 py-2 text-right font-medium text-gray-500 w-16">Unit</th>
+                        <th className="px-4 py-2 text-right font-medium text-gray-500 w-20">Qty</th>
+                        <th
+                          onClick={() => toggleSort('unit_price')}
+                          className="px-4 py-2 text-right font-medium text-gray-500 w-28 cursor-pointer select-none hover:text-gray-700"
+                        >Unit Price{arrow('unit_price')}</th>
+                        <th
+                          onClick={() => toggleSort('effective_total')}
+                          className="px-4 py-2 text-right font-medium text-gray-500 w-28 cursor-pointer select-none hover:text-gray-700"
+                        >Total (€){arrow('effective_total')}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {ch.items.map(item => {
+                        const total = effectiveTotal(item)
+                        return (
+                          <tr key={item.id} className="hover:bg-gray-50/60">
+                            <td className="px-4 py-2 text-gray-500 font-mono">{item.item_code ?? '—'}</td>
+                            <td className="px-4 py-2 text-gray-800 max-w-xs">
+                              <div className="truncate" title={item.description}>{item.description}</div>
+                            </td>
+                            <td className="px-4 py-2 text-right text-gray-600">{item.unit ?? '—'}</td>
+                            <td className="px-4 py-2 text-right text-gray-700">
+                              {item.quantity != null ? item.quantity.toLocaleString('es-ES') : '—'}
+                            </td>
+                            <td className="px-4 py-2 text-right text-gray-700">{fmt(item.unit_price)}</td>
+                            <td className="px-4 py-2 text-right text-gray-900 font-medium">
+                              {total ? `€${fmt(total)}` : '—'}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-gray-50 border-t border-gray-200">
+                        <td colSpan={5} className="px-4 py-2 text-right text-xs font-semibold text-gray-700">
+                          Chapter Subtotal
+                        </td>
+                        <td className="px-4 py-2 text-right text-xs font-bold text-gray-900">
+                          €{fmt(ch.subtotal)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Grand total */}
+      {chapters.length > 0 && (
+        <div className="bg-gray-900 rounded-xl px-6 py-4 flex items-center justify-between">
+          <span className="text-gray-400 text-sm">{totalItems} items across {chapters.length} chapters</span>
+          <span className="text-white font-bold text-base">Total: €{fmt(grandTotal)}</span>
         </div>
       )}
-
-      <div style={card}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <div style={{ fontWeight: 600, fontSize: '.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.05em' }}>BOQ Line Items</div>
-          <div style={{ fontSize: '.8rem', color: '#94a3b8' }}>{filtered.length} of {items.length} items</div>
-        </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '760px' }}>
-            <thead><tr>
-              <th style={th(true)} onClick={() => toggleSort('chapter')}>Chapter{arrow('chapter')}</th>
-              <th style={th()}>Code</th>
-              <th style={th(true)} onClick={() => toggleSort('description')}>Description{arrow('description')}</th>
-              <th style={th()}>Unit</th>
-              <th style={{ ...th(), textAlign: 'right' }}>Qty</th>
-              <th style={{ ...th(true), textAlign: 'right' }} onClick={() => toggleSort('unit_price')}>Unit Price{arrow('unit_price')}</th>
-              <th style={{ ...th(true), textAlign: 'right' }} onClick={() => toggleSort('effective_total')}>Total (€){arrow('effective_total')}</th>
-            </tr></thead>
-            <tbody>
-              {filtered.length === 0
-                ? <tr><td colSpan={7} style={{ padding: '3rem', textAlign: 'center', color: '#94a3b8' }}>No items match the current filters.</td></tr>
-                : filtered.map(item => {
-                    const total = effectiveTotal(item)
-                    return (
-                      <tr key={item.id} onMouseEnter={e => (e.currentTarget.style.background = '#f8fafc')} onMouseLeave={e => (e.currentTarget.style.background = 'white')}>
-                        <td style={{ ...td(), color: '#64748b', fontSize: '.78rem', whiteSpace: 'nowrap' }}>
-                          {item.chapter_id && <span style={{ background: '#eff6ff', color: '#1d4ed8', padding: '.15rem .45rem', borderRadius: '4px', fontWeight: 600 }}>{item.chapter_id}</span>}
-                        </td>
-                        <td style={{ ...td(), color: '#64748b', fontSize: '.78rem', whiteSpace: 'nowrap' }}>{item.item_code ?? '—'}</td>
-                        <td style={td()}>{item.description}</td>
-                        <td style={td(false, true)}>{item.unit ?? '—'}</td>
-                        <td style={td(true, true)}>{item.quantity != null ? item.quantity.toLocaleString('es-ES') : '—'}</td>
-                        <td style={td(true)}>{fmt(item.unit_price)}</td>
-                        <td style={{ ...td(true), fontWeight: total ? 500 : 400 }}>{fmt(total || null)}</td>
-                      </tr>
-                    )
-                  })
-              }
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   )
 }
