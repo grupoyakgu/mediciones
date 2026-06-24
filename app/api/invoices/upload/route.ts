@@ -218,9 +218,8 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
       }
     )
 
-    const [{ data: boqItems }, { data: project }, { data: existingInvoices }] = await Promise.all([
+    const [{ data: boqItems }, { data: existingInvoices }] = await Promise.all([
       supabase.from('boq_items').select('id, description, chapter_name, item_code, quantity, total_amount').eq('project_id', projectId),
-      supabase.from('projects').select('name').eq('id', projectId).single(),
       supabase.from('invoices').select('id, invoice_number').eq('project_id', projectId),
     ])
 
