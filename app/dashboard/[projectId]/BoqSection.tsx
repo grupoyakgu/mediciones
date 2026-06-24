@@ -14,7 +14,7 @@ export default function BoqSection({ projectId, boqUploaded }: Props) {
     <BoqUpload
       projectId={projectId}
       boqUploaded={boqUploaded}
-      onSuccess={() => router.refresh()}
+      onSuccess={() => setTimeout(() => router.refresh(), 2000)}
     />
   )
 }

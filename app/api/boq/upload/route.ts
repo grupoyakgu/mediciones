@@ -15,7 +15,9 @@ interface BoqRow {
 
 function toNum(v: unknown): number | null {
   if (v == null || v === '') return null
-  const n = Number(v)
+  // Strip thousands separators (commas) before parsing
+  const s = String(v).replace(/,/g, '')
+  const n = Number(s)
   return isNaN(n) ? null : n
 }
 
@@ -167,7 +169,7 @@ export async function POST(req: NextRequest) {
           send({ imported, total: items.length })
         }
 
-        await supabase.from('projects').update({ boq_uploaded: true }).eq('id', projectId)
+        await supabase.from('projects').update({ boq_uploaded: true, boq_file_name: file.name }).eq('id', projectId)
         send({ done: true, count: imported })
       } catch (err) {
         console.error('[boq/upload]', err)
