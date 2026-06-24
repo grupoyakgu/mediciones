@@ -11,20 +11,14 @@ interface BoqRow {
   quantity: number | null
   unit_price: number | null
   total_amount: number | null
-  numbering_anomaly: boolean
 }
 
 function toNum(v: unknown): number | null {
   if (v == null || v === '') return null
+  // Strip thousands separators (commas) before parsing
   const s = String(v).replace(/,/g, '')
   const n = Number(s)
   return isNaN(n) ? null : n
-}
-
-function detectAnomaly(code: string, lastChapterCode: string): boolean {
-  if (!code) return true
-  const prefix = code.split('.')[0]
-  return !prefix || prefix !== lastChapterCode
 }
 
 function parseXlsx(buffer: ArrayBuffer): BoqRow[] {
@@ -34,7 +28,6 @@ function parseXlsx(buffer: ArrayBuffer): BoqRow[] {
 
   const chapterNames = new Map<string, string>()
   const items: BoqRow[] = []
-  let lastChapterCode = ''
 
   for (const row of rawRows) {
     if (!Array.isArray(row)) continue
@@ -47,19 +40,17 @@ function parseXlsx(buffer: ArrayBuffer): BoqRow[] {
 
     if (nat === 'Capítulo' || nat === 'Capitulo') {
       chapterNames.set(code, desc)
-      lastChapterCode = code
     } else if (nat === 'Partida') {
-      const anomaly = detectAnomaly(code, lastChapterCode)
+      const topChapter = code.split('.')[0]
       items.push({
-        chapter_id:        lastChapterCode,
-        chapter_name:      chapterNames.get(lastChapterCode) ?? '',
-        item_code:         code,
-        description:       desc,
+        chapter_id: code,
+        chapter_name: chapterNames.get(topChapter) ?? '',
+        item_code: code,
+        description: desc,
         unit,
-        quantity:          toNum(row[4]),
-        unit_price:        toNum(row[5]),
-        total_amount:      toNum(row[6]),
-        numbering_anomaly: anomaly,
+        quantity: toNum(row[4]),
+        unit_price: toNum(row[5]),
+        total_amount: toNum(row[6]),
       })
     }
   }
@@ -71,7 +62,6 @@ function parseCsv(text: string): BoqRow[] {
   const lines = text.split(/\r?\n/)
   const chapterNames = new Map<string, string>()
   const items: BoqRow[] = []
-  let lastChapterCode = ''
 
   for (const line of lines) {
     const cols = line.split(',')
@@ -84,19 +74,17 @@ function parseCsv(text: string): BoqRow[] {
 
     if (nat === 'Capítulo' || nat === 'Capitulo') {
       chapterNames.set(code, desc)
-      lastChapterCode = code
     } else if (nat === 'Partida') {
-      const anomaly = detectAnomaly(code, lastChapterCode)
+      const topChapter = code.split('.')[0]
       items.push({
-        chapter_id:        lastChapterCode,
-        chapter_name:      chapterNames.get(lastChapterCode) ?? '',
-        item_code:         code,
-        description:       desc,
+        chapter_id: code,
+        chapter_name: chapterNames.get(topChapter) ?? '',
+        item_code: code,
+        description: desc,
         unit,
-        quantity:          toNum(cols[4]?.replace(/"/g, '').replace(/,/g, '')),
-        unit_price:        toNum(cols[5]?.replace(/"/g, '').replace(/,/g, '')),
-        total_amount:      toNum(cols[6]?.replace(/"/g, '').replace(/,/g, '')),
-        numbering_anomaly: anomaly,
+        quantity: toNum(cols[4]?.replace(/"/g, '').replace(/,/g, '')),
+        unit_price: toNum(cols[5]?.replace(/"/g, '').replace(/,/g, '')),
+        total_amount: toNum(cols[6]?.replace(/"/g, '').replace(/,/g, '')),
       })
     }
   }
@@ -152,14 +140,14 @@ export async function POST(req: NextRequest) {
 
     for (let i = 0; i < items.length; i += BATCH) {
       const batch = items.slice(i, i + BATCH).map((item) => ({
-        project_id:   projectId,
-        chapter_id:   item.chapter_id,
+        project_id: projectId,
+        chapter_id: item.chapter_id,
         chapter_name: item.chapter_name,
-        item_code:    item.item_code,
-        description:  item.description,
-        unit:         item.unit,
-        quantity:     item.quantity,
-        unit_price:   item.unit_price,
+        item_code: item.item_code,
+        description: item.description,
+        unit: item.unit,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
         total_amount: item.total_amount,
       }))
 
@@ -169,26 +157,6 @@ export async function POST(req: NextRequest) {
       imported += batch.length
     }
 
-    // Raise critical alerts for items with numbering anomalies
-    const anomalies = items.filter(i => i.numbering_anomaly)
-    if (anomalies.length > 0) {
-      const alertRows = anomalies.map(item => ({
-        project_id:  projectId,
-        invoice_id:  null,
-        type:        'boq_numbering_anomaly',
-        priority:    'critical',
-        description: `BOQ item with incorrect/missing numbering (kept in chapter "${item.chapter_name || lastChapter(item)}"): ${item.item_code || '(no code)'} — ${item.description}`,
-      }))
-
-      // Delete previous BOQ numbering alerts for this project before inserting fresh ones
-      await supabase.from('alerts').delete().eq('project_id', projectId).eq('type', 'boq_numbering_anomaly')
-      const { error: alertErr } = await supabase.from('alerts').insert(alertRows)
-      if (alertErr) console.error('[boq/upload] alert insert error:', alertErr.message)
-    } else {
-      // Clear old numbering alerts if the new file has none
-      await supabase.from('alerts').delete().eq('project_id', projectId).eq('type', 'boq_numbering_anomaly')
-    }
-
     const { error: updateError } = await supabase
       .from('projects')
       .update({ boq_file_name: file.name })
@@ -196,13 +164,9 @@ export async function POST(req: NextRequest) {
 
     if (updateError) return NextResponse.json({ error: 'BOQ imported but failed to save filename: ' + updateError.message }, { status: 500 })
 
-    return NextResponse.json({ count: imported, anomalyCount: anomalies.length })
+    return NextResponse.json({ count: imported })
   } catch (err) {
     console.error('[boq/upload]', err)
     return NextResponse.json({ error: String(err) }, { status: 500 })
   }
-}
-
-function lastChapter(item: BoqRow): string {
-  return item.chapter_id || 'unknown'
 }
