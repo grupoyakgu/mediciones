@@ -137,7 +137,7 @@ export default function Sidebar({ userEmail }: { userEmail: string }) {
                         : 'text-white/50 hover:text-white hover:bg-white/5'
                     }`}
                   >
-                    <span className="text-sm leading-none w-4 text-center">{tab.icon}</span>
+                    <span className="text-sm leading-none w-4 text-center" style={tab.label === 'Alerts' ? { filter: 'grayscale(1) brightness(10)' } : {}}>{tab.icon}</span>
                     {tab.label}
                   </Link>
                 ))}

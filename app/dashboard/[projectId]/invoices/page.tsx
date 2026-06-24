@@ -561,6 +561,11 @@ export default function InvoicesPage() {
                           return score < 51 && !s.manually_approved
                         })
                       : []
+                    const hasLowSubItems = hasSubItems && item.sub_items!.some(s => {
+                      const { score } = matchSubItem(s, boqItems)
+                      return score < 51
+                    })
+                    const allLowApproved = hasLowSubItems && lowUnnapproved.length === 0
 
                     return (
                       <>
@@ -600,7 +605,12 @@ export default function InvoicesPage() {
                                 {item.boq_unit_price != null && (item.unit_price ?? 0) > item.boq_unit_price ? 'PRICE ▲' : 'QTY OVERRUN'}
                               </span>
                             )}
-                            {!alert && <span style={{ color: '#94a3b8', fontSize: '.75rem' }}>✓ OK</span>}
+                            {!alert && hasLowSubItems && !allLowApproved && (
+                              <span style={{ background: '#fef3c7', color: '#92400e', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.75rem', fontWeight: 600 }}>⚠ REVIEW REQUIRED</span>
+                            )}
+                            {!alert && (!hasLowSubItems || allLowApproved) && (
+                              <span style={{ color: '#94a3b8', fontSize: '.75rem' }}>✓ OK</span>
+                            )}
                           </td>
                         </tr>
                         {isExpanded && hasSubItems && (
