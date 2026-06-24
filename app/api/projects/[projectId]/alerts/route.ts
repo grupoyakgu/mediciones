@@ -32,7 +32,7 @@ export async function GET(
 
   // Fetch invoice metadata separately to avoid PostgREST schema-cache join issues
   const invoiceIds = [...new Set((alertRows ?? []).map(a => a.invoice_id).filter(Boolean))]
-  let invoiceMap: Record<string, { invoice_number: string | null; supplier: string | null }> = {}
+  const invoiceMap: Record<string, { invoice_number: string | null; supplier: string | null }> = {}
   if (invoiceIds.length) {
     const { data: invRows } = await supabase
       .from('invoices')
