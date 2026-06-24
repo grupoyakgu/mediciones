@@ -40,6 +40,7 @@ interface BoqRow {
   chapter_name: string | null
   item_code: string | null
   quantity: number | null
+  total_amount: number | null
 }
 
 function stripFences(text: string): string {
@@ -203,7 +204,7 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
     )
 
     const [{ data: boqItems }, { data: project }, { data: existingInvoices }] = await Promise.all([
-      supabase.from('boq_items').select('id, description, chapter_name, item_code, quantity').eq('project_id', projectId),
+      supabase.from('boq_items').select('id, description, chapter_name, item_code, quantity, total_amount').eq('project_id', projectId),
       supabase.from('projects').select('name, email_recipients').eq('id', projectId).single(),
       supabase.from('invoices').select('id, invoice_number').eq('project_id', projectId),
     ])
@@ -256,14 +257,15 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
     const boqQtyMap = new Map((boqItems ?? []).map(b => [b.id, b.quantity]))
     const matchedBoqIds = itemRows.filter(r => r.boq_item_id).map(r => r.boq_item_id as string)
     const emailAlerts: { description: string; details: string }[] = []
-    const alertRows: { project_id: string; invoice_id: string; type: string; description: string }[] = []
+    const alertRows: { project_id: string; invoice_id: string; type: string; description: string; priority: string }[] = []
 
-    // Duplicate invoice number alert
+    // Duplicate invoice number → high priority
     if (dupInvoice) {
       alertRows.push({
         project_id: projectId,
         invoice_id: invoice.id,
         type: 'duplicate_invoice',
+        priority: 'high',
         description: `Duplicate invoice number: ${invoiceData.invoice_number ?? '9999'} was already uploaded`,
       })
       emailAlerts.push({
@@ -272,20 +274,43 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
       })
     }
 
-    // Not-in-BOQ alerts
+    // Not-in-BOQ → low priority
     for (const row of itemRows) {
       if (row.match_status === 'not_in_boq') {
         alertRows.push({
           project_id: projectId,
           invoice_id: invoice.id,
           type: 'not_in_boq',
+          priority: 'low',
           description: `Not found in BOQ: ${row.description}`,
         })
         emailAlerts.push({ description: row.description, details: 'Item not found in BOQ' })
       }
     }
 
-    // Quantity overrun alerts
+    // Chapter amount exceeds BOQ chapter budget → high priority
+    const boqChapterBudget = new Map<string, number>()
+    for (const b of boqItems ?? []) {
+      const ch = b.chapter_name ?? ''
+      if (ch) boqChapterBudget.set(ch, (boqChapterBudget.get(ch) ?? 0) + (b.total_amount ?? 0))
+    }
+    for (const row of itemRows) {
+      const chapterName = (boqItems ?? []).find(b => b.id === row.boq_item_id)?.chapter_name ?? ''
+      const chBudget = chapterName ? boqChapterBudget.get(chapterName) : undefined
+      if (chBudget != null && chBudget > 0 && (row.total_amount ?? 0) > chBudget) {
+        const details = `Chapter amount ${(row.total_amount ?? 0).toLocaleString('es-ES')} > budget ${chBudget.toLocaleString('es-ES')}`
+        alertRows.push({
+          project_id: projectId,
+          invoice_id: invoice.id,
+          type: 'budget_exceeded',
+          priority: 'high',
+          description: `Budget exceeded: ${row.description} — ${details}`,
+        })
+        emailAlerts.push({ description: row.description, details })
+      }
+    }
+
+    // Quantity overrun → high priority
     if (matchedBoqIds.length) {
       const { data: allInvIds } = await supabase.from('invoices').select('id').eq('project_id', projectId)
       const { data: accData } = await supabase
@@ -310,6 +335,7 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
             project_id: projectId,
             invoice_id: invoice.id,
             type: 'quantity_overrun',
+            priority: 'high',
             description: `Quantity overrun: ${row.description} — ${details}`,
           })
           emailAlerts.push({ description: row.description, details })

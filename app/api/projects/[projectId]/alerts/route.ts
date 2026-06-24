@@ -25,7 +25,7 @@ export async function GET(
   const supabase = makeSupabase()
   const { data: alertRows, error } = await supabase
     .from('alerts')
-    .select('id, type, description, status, created_at, invoice_id')
+    .select('id, type, description, status, priority, created_at, invoice_id')
     .eq('project_id', params.projectId)
     .order('created_at', { ascending: false })
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
