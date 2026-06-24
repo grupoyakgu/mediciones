@@ -27,7 +27,7 @@ export default async function OverviewPage({ params }: { params: { projectId: st
 
   const [{ data: project }, { data: boqItems }, { data: invoices }] = await Promise.all([
     supabase.from('projects').select('name, currency, alert_threshold_pct, boq_file_name, boq_uploaded').eq('id', projectId).single(),
-    supabase.from('boq_items').select('id, description, chapter_name, total_amount').eq('project_id', projectId),
+    supabase.from('boq_items').select('id, description, chapter_name, quantity, unit_price, total_amount').eq('project_id', projectId),
     // Only approved invoices count towards the summary
     supabase.from('invoices').select('id, total_amount, created_at').eq('project_id', projectId).eq('status', 'approved').order('created_at'),
   ])
@@ -57,7 +57,11 @@ export default async function OverviewPage({ params }: { params: { projectId: st
     }
   }
 
-  const totalBudget = (boqItems ?? []).reduce((s, r) => s + (r.total_amount ?? 0), 0)
+  function boqEffectiveTotal(r: { total_amount: number | null; quantity?: number | null; unit_price?: number | null }): number {
+    if (r.total_amount != null && r.total_amount !== 0) return r.total_amount
+    return (r.quantity ?? 0) * (r.unit_price ?? 0)
+  }
+  const totalBudget = (boqItems ?? []).reduce((s, r) => s + boqEffectiveTotal(r), 0)
   const totalInvoiced = (invoices ?? []).reduce((s, r) => s + (r.total_amount ?? 0), 0)
   const pctUsed = totalBudget > 0 ? (totalInvoiced / totalBudget) * 100 : 0
   const alertCount = (invoiceItems ?? []).filter(i => i.match_status !== 'ok').length
@@ -70,7 +74,7 @@ export default async function OverviewPage({ params }: { params: { projectId: st
   for (const item of boqItems ?? []) {
     const ch = item.chapter_name || 'Sin capítulo'
     const existing = chapterMap.get(ch) ?? { budget: 0, invoiced: 0 }
-    existing.budget += item.total_amount ?? 0
+    existing.budget += boqEffectiveTotal(item)
     chapterMap.set(ch, existing)
   }
   const boqChapterMap = new Map<string, string>()

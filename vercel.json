@@ -5,6 +5,9 @@
     },
     "app/api/architect/route.ts": {
       "maxDuration": 60
+    },
+    "app/api/boq/upload/route.ts": {
+      "maxDuration": 60
     }
   }
 }
