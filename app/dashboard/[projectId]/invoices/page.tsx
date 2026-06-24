@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 
 interface Invoice {
   id: string
@@ -109,7 +109,9 @@ export default function InvoicesPage() {
   const projectId = params.projectId as string
   const supabase = createClient()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const fileRef = useRef<HTMLInputElement>(null)
+  const invoiceRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({})
 
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
@@ -152,6 +154,15 @@ export default function InvoicesPage() {
       .order('invoice_date', { ascending: false })
     setInvoices(data ?? [])
     setLoading(false)
+    const target = searchParams.get('invoice')
+    if (target && (data ?? []).find(i => i.id === target)) {
+      const inv = (data ?? []).find(i => i.id === target)!
+      setSelectedId(target)
+      await loadDetail(target, inv.status)
+      setTimeout(() => {
+        invoiceRowRefs.current[target]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 150)
+    }
   }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -429,6 +440,7 @@ export default function InvoicesPage() {
                 {displayed.map(inv => (
                   <tr
                     key={inv.id}
+                    ref={el => { invoiceRowRefs.current[inv.id] = el }}
                     onClick={() => selectInvoice(inv)}
                     style={{ cursor: 'pointer', background: selectedId === inv.id ? '#eff6ff' : 'white', transition: 'background .1s' }}
                     onMouseEnter={e => { if (selectedId !== inv.id) e.currentTarget.style.background = '#f8fafc' }}

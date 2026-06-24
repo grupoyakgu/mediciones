@@ -85,7 +85,7 @@ export default function OverviewCharts({
                       stroke="#fff"
                       strokeWidth={2}
                       style={{ cursor: 'pointer' }}
-                      onClick={() => router.push(`/dashboard/${projectId}/invoices/${payload.invoiceId}`)}
+                      onClick={() => router.push(`/dashboard/${projectId}/invoices?invoice=${payload.invoiceId}`)}
                     />
                   )
                 }}
@@ -94,7 +94,7 @@ export default function OverviewCharts({
                   style: { cursor: 'pointer' },
                   onClick: (_: unknown, payload: unknown) => {
                     const d = (payload as { payload?: CumDatum })?.payload
-                    if (d?.invoiceId) router.push(`/dashboard/${projectId}/invoices/${d.invoiceId}`)
+                    if (d?.invoiceId) router.push(`/dashboard/${projectId}/invoices?invoice=${d.invoiceId}`)
                   },
                 }}
               />
