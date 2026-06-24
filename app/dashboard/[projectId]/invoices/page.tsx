@@ -116,6 +116,7 @@ export default function InvoicesPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
 
   const [search, setSearch] = useState('')
@@ -165,28 +166,49 @@ export default function InvoicesPage() {
     }
   }
 
-  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
     setUploading(true)
+    setUploadProgress(0)
     setMsg(null)
     const fd = new FormData()
     fd.append('file', file)
     fd.append('projectId', projectId)
-    const res = await fetch('/api/invoices/upload', { method: 'POST', body: fd })
-    const data = await res.json()
-    if (res.ok) {
-      setMsg({ type: 'ok', text: `✅ Invoice processed: ${data.itemCount} items, ${data.alertCount} alerts` })
-      await loadInvoices()
-      fetch(`/api/projects/${projectId}/alerts`).then(r => r.json()).then(d => {
-        const ids = new Set<string>((d.alerts ?? []).filter((a: { type: string; invoice_id: string | null }) => a.type === 'duplicate_invoice' && a.invoice_id).map((a: { invoice_id: string }) => a.invoice_id))
-        setDupInvoiceIds(ids)
-      })
-    } else {
-      setMsg({ type: 'err', text: data.error ?? 'Upload failed' })
+
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/api/invoices/upload')
+
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) {
+        setUploadProgress(Math.round((ev.loaded / ev.total) * 90))
+      }
     }
-    setUploading(false)
-    if (fileRef.current) fileRef.current.value = ''
+
+    xhr.onload = async () => {
+      setUploadProgress(100)
+      const data = JSON.parse(xhr.responseText)
+      if (xhr.status >= 200 && xhr.status < 300) {
+        setMsg({ type: 'ok', text: `✅ Invoice processed: ${data.itemCount} items, ${data.alertCount} alerts` })
+        await loadInvoices()
+        fetch(`/api/projects/${projectId}/alerts`).then(r => r.json()).then(d => {
+          const ids = new Set<string>((d.alerts ?? []).filter((a: { type: string; invoice_id: string | null }) => a.type === 'duplicate_invoice' && a.invoice_id).map((a: { invoice_id: string }) => a.invoice_id))
+          setDupInvoiceIds(ids)
+        })
+      } else {
+        setMsg({ type: 'err', text: data.error ?? 'Upload failed' })
+      }
+      setUploading(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+
+    xhr.onerror = () => {
+      setMsg({ type: 'err', text: 'Network error during upload' })
+      setUploading(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+
+    xhr.send(fd)
   }
 
   async function toggleApproval(inv: Invoice, e: React.MouseEvent) {
@@ -390,6 +412,18 @@ export default function InvoicesPage() {
           </button>
         </div>
       </div>
+
+      {uploading && (
+        <div style={{ marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.75rem', color: '#64748b', marginBottom: '.25rem' }}>
+            <span>{uploadProgress < 90 ? 'Uploading…' : 'Processing…'}</span>
+            <span>{uploadProgress}%</span>
+          </div>
+          <div style={{ height: '6px', background: '#e2e8f0', borderRadius: '999px', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${uploadProgress}%`, background: '#2563eb', borderRadius: '999px', transition: 'width .2s ease' }} />
+          </div>
+        </div>
+      )}
 
       {msg && (
         <div style={{ padding: '.875rem 1rem', borderRadius: '8px', marginBottom: '1.25rem', fontSize: '.875rem', background: msg.type === 'ok' ? '#f0fdf4' : '#fef2f2', border: `1px solid ${msg.type === 'ok' ? '#bbf7d0' : '#fecaca'}`, color: msg.type === 'ok' ? '#15803d' : '#dc2626' }}>
