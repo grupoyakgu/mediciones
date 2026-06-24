@@ -202,9 +202,10 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
       }
     )
 
-    const [{ data: boqItems }, { data: project }] = await Promise.all([
+    const [{ data: boqItems }, { data: project }, { data: existingInvoices }] = await Promise.all([
       supabase.from('boq_items').select('id, description, chapter_name, item_code, quantity').eq('project_id', projectId),
       supabase.from('projects').select('name, email_recipients').eq('id', projectId).single(),
+      supabase.from('invoices').select('id, invoice_number').eq('project_id', projectId),
     ])
 
     const { data: invoice, error: invoiceError } = await supabase
@@ -225,6 +226,10 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
       .select('id')
       .single()
     if (invoiceError) throw invoiceError
+
+    const dupInvoice = (existingInvoices ?? []).find(
+      i => i.id !== invoice.id && i.invoice_number === (invoiceData.invoice_number ?? '9999')
+    )
 
     const itemRows = invoiceData.items.map((item) => {
       const match = findBoqMatch(item.description ?? '', boqItems ?? [])
@@ -247,20 +252,47 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
       if (itemsError) throw itemsError
     }
 
-    // Check for quantity overruns and generate alerts
+    // Generate alerts: duplicate invoice, not_in_boq items, quantity overruns
     const boqQtyMap = new Map((boqItems ?? []).map(b => [b.id, b.quantity]))
     const matchedBoqIds = itemRows.filter(r => r.boq_item_id).map(r => r.boq_item_id as string)
-    const quantityAlerts: { description: string; details: string }[] = []
+    const emailAlerts: { description: string; details: string }[] = []
+    const alertRows: { project_id: string; invoice_id: string; type: string; description: string }[] = []
 
+    // Duplicate invoice number alert
+    if (dupInvoice) {
+      alertRows.push({
+        project_id: projectId,
+        invoice_id: invoice.id,
+        type: 'duplicate_invoice',
+        description: `Duplicate invoice number: ${invoiceData.invoice_number ?? '9999'} was already uploaded`,
+      })
+      emailAlerts.push({
+        description: `Invoice #${invoiceData.invoice_number ?? '9999'}`,
+        details: 'Duplicate invoice number — already exists in this project',
+      })
+    }
+
+    // Not-in-BOQ alerts
+    for (const row of itemRows) {
+      if (row.match_status === 'not_in_boq') {
+        alertRows.push({
+          project_id: projectId,
+          invoice_id: invoice.id,
+          type: 'not_in_boq',
+          description: `Not found in BOQ: ${row.description}`,
+        })
+        emailAlerts.push({ description: row.description, details: 'Item not found in BOQ' })
+      }
+    }
+
+    // Quantity overrun alerts
     if (matchedBoqIds.length) {
-      // Accumulated qty across ALL invoices for this project per boq_item
+      const { data: allInvIds } = await supabase.from('invoices').select('id').eq('project_id', projectId)
       const { data: accData } = await supabase
         .from('invoice_items')
         .select('boq_item_id, quantity')
         .in('boq_item_id', matchedBoqIds)
-        .in('invoice_id',
-          (await supabase.from('invoices').select('id').eq('project_id', projectId)).data?.map(i => i.id) ?? []
-        )
+        .in('invoice_id', (allInvIds ?? []).map(i => i.id))
 
       const accMap = new Map<string, number>()
       for (const row of accData ?? []) {
@@ -268,7 +300,6 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
           accMap.set(row.boq_item_id, (accMap.get(row.boq_item_id) ?? 0) + (row.quantity ?? 0))
       }
 
-      const alertRows: { project_id: string; invoice_id: string; type: string; description: string }[] = []
       for (const row of itemRows) {
         if (!row.boq_item_id) continue
         const boqQty = boqQtyMap.get(row.boq_item_id)
@@ -281,20 +312,20 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
             type: 'quantity_overrun',
             description: `Quantity overrun: ${row.description} — ${details}`,
           })
-          quantityAlerts.push({ description: row.description, details })
+          emailAlerts.push({ description: row.description, details })
         }
-      }
-
-      if (alertRows.length) {
-        await supabase.from('alerts').insert(alertRows)
-        const recipients: string[] = (project as { email_recipients?: string[] } | null)?.email_recipients ?? []
-        const projectName: string = (project as { name?: string } | null)?.name ?? projectId
-        await sendAlertEmail(recipients, projectName, invoiceData.invoice_number ?? null, quantityAlerts).catch(() => {})
       }
     }
 
-    const alertCount = itemRows.filter(r => r.match_status !== 'ok').length + quantityAlerts.length
-    return NextResponse.json({ success: true, invoiceId: invoice.id, itemCount: itemRows.length, alertCount })
+    if (alertRows.length) {
+      const { error: alertsError } = await supabase.from('alerts').insert(alertRows)
+      if (alertsError) throw alertsError
+      const recipients: string[] = (project as { email_recipients?: string[] } | null)?.email_recipients ?? []
+      const projectName: string = (project as { name?: string } | null)?.name ?? projectId
+      await sendAlertEmail(recipients, projectName, invoiceData.invoice_number ?? null, emailAlerts).catch(() => {})
+    }
+
+    return NextResponse.json({ success: true, invoiceId: invoice.id, itemCount: itemRows.length, alertCount: alertRows.length })
   } catch (err) {
     const msg = err instanceof Error
       ? err.message

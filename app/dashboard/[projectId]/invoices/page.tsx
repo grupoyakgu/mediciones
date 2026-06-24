@@ -73,12 +73,17 @@ export default function InvoicesPage() {
   const [deleting, setDeleting] = useState(false)
   const [retentionPct, setRetentionPct] = useState(10)
   const [expandedChapter, setExpandedChapter] = useState<string | null>(null)
+  const [dupInvoiceIds, setDupInvoiceIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     loadInvoices()
     fetch('/api/projects').then(r => r.json()).then(d => {
       const p = (d.projects ?? []).find((x: { id: string; retention_pct?: number }) => x.id === projectId)
       if (p?.retention_pct != null) setRetentionPct(p.retention_pct)
+    })
+    fetch(`/api/projects/${projectId}/alerts`).then(r => r.json()).then(d => {
+      const ids = new Set<string>((d.alerts ?? []).filter((a: { type: string; invoice_id: string | null }) => a.type === 'duplicate_invoice' && a.invoice_id).map((a: { invoice_id: string }) => a.invoice_id))
+      setDupInvoiceIds(ids)
     })
   }, []) // eslint-disable-line
 
@@ -105,6 +110,10 @@ export default function InvoicesPage() {
     if (res.ok) {
       setMsg({ type: 'ok', text: `✅ Invoice processed: ${data.itemCount} items, ${data.alertCount} alerts` })
       await loadInvoices()
+      fetch(`/api/projects/${projectId}/alerts`).then(r => r.json()).then(d => {
+        const ids = new Set<string>((d.alerts ?? []).filter((a: { type: string; invoice_id: string | null }) => a.type === 'duplicate_invoice' && a.invoice_id).map((a: { invoice_id: string }) => a.invoice_id))
+        setDupInvoiceIds(ids)
+      })
     } else {
       setMsg({ type: 'err', text: data.error ?? 'Upload failed' })
     }
@@ -336,16 +345,21 @@ export default function InvoicesPage() {
                     <td style={td(false, true)}>{inv.invoice_date ?? inv.created_at.slice(0, 10)}</td>
                     <td style={{ ...td(true), fontWeight: 500 }}>{fmt(inv.total_amount, inv.currency ?? 'EUR')}</td>
                     <td style={{ ...td(), textAlign: 'center' }}>
-                      <button
-                        onClick={e => toggleApproval(inv, e)}
-                        style={{
-                          padding: '.25rem .75rem', border: 'none', borderRadius: '999px', fontSize: '.78rem', fontWeight: 600, cursor: 'pointer',
-                          background: inv.status === 'approved' ? '#dcfce7' : '#f1f5f9',
-                          color: inv.status === 'approved' ? '#15803d' : '#64748b'
-                        }}
-                      >
-                        {inv.status === 'approved' ? '✓ Approved' : 'Pending'}
-                      </button>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                        <button
+                          onClick={e => toggleApproval(inv, e)}
+                          style={{
+                            padding: '.25rem .75rem', border: 'none', borderRadius: '999px', fontSize: '.78rem', fontWeight: 600, cursor: 'pointer',
+                            background: inv.status === 'approved' ? '#dcfce7' : '#f1f5f9',
+                            color: inv.status === 'approved' ? '#15803d' : '#64748b'
+                          }}
+                        >
+                          {inv.status === 'approved' ? '✓ Approved' : 'Pending'}
+                        </button>
+                        {dupInvoiceIds.has(inv.id) && (
+                          <span style={{ background: '#fee2e2', color: '#dc2626', fontSize: '.7rem', fontWeight: 700, padding: '.1rem .4rem', borderRadius: '4px', letterSpacing: '.04em' }} title="Duplicate invoice number">DUP</span>
+                        )}
+                      </div>
                     </td>
                     <td style={{ ...td(), textAlign: 'right' }}>
                       <button onClick={e => { e.stopPropagation(); setConfirmDelete(inv) }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: '.85rem', padding: '.25rem .5rem' }} title="Delete">✕</button>
