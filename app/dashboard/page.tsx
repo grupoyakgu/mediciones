@@ -39,6 +39,8 @@ export default function AllProjectsPage() {
     if (!error && data) {
       setNewName('')
       setShowNew(false)
+      window.dispatchEvent(new Event('projectsChanged'))
+      router.refresh()
       router.push(`/dashboard/${data.id}`)
     }
   }
@@ -51,6 +53,8 @@ export default function AllProjectsPage() {
     setProjects(prev => prev.filter(p => p.id !== confirmDelete.id))
     setConfirmDelete(null)
     setDeleting(false)
+    window.dispatchEvent(new Event('projectsChanged'))
+    router.refresh()
   }
 
   const card: React.CSSProperties = { background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '1.5rem', cursor: 'pointer', transition: 'box-shadow .15s' }

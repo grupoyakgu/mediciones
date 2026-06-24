@@ -61,7 +61,11 @@ export default function Sidebar({ userEmail }: { userEmail: string }) {
     setProjects(data.projects ?? [])
   }, [])
 
-  useEffect(() => { loadProjects() }, [loadProjects])
+  useEffect(() => {
+    loadProjects()
+    window.addEventListener('projectsChanged', loadProjects)
+    return () => window.removeEventListener('projectsChanged', loadProjects)
+  }, [loadProjects])
 
   async function handleLogout() {
     const supabase = createClient()
