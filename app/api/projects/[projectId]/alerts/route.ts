@@ -23,13 +23,29 @@ export async function GET(
   { params }: { params: { projectId: string } }
 ) {
   const supabase = makeSupabase()
-  const { data, error } = await supabase
+  const { data: alertRows, error } = await supabase
     .from('alerts')
-    .select('id, type, description, status, created_at, invoice_id, invoices(invoice_number, supplier)')
+    .select('id, type, description, status, created_at, invoice_id')
     .eq('project_id', params.projectId)
     .order('created_at', { ascending: false })
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ alerts: data })
+
+  // Fetch invoice metadata separately to avoid PostgREST schema-cache join issues
+  const invoiceIds = [...new Set((alertRows ?? []).map(a => a.invoice_id).filter(Boolean))]
+  let invoiceMap: Record<string, { invoice_number: string | null; supplier: string | null }> = {}
+  if (invoiceIds.length) {
+    const { data: invRows } = await supabase
+      .from('invoices')
+      .select('id, invoice_number, supplier')
+      .in('id', invoiceIds)
+    for (const inv of invRows ?? []) invoiceMap[inv.id] = { invoice_number: inv.invoice_number, supplier: inv.supplier }
+  }
+
+  const alerts = (alertRows ?? []).map(a => ({
+    ...a,
+    invoices: a.invoice_id ? (invoiceMap[a.invoice_id] ?? null) : null,
+  }))
+  return NextResponse.json({ alerts })
 }
 
 export async function PATCH(

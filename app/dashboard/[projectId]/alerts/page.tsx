@@ -17,11 +17,13 @@ export default function AlertsPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [acknowledging, setAcknowledging] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/projects/${projectId}/alerts`)
     const data = await res.json()
+    if (!res.ok) { setError(data.error ?? 'Failed to load alerts'); setLoading(false); return }
     setAlerts(data.alerts ?? [])
     setLoading(false)
   }, [projectId])
@@ -53,9 +55,8 @@ export default function AlertsPage() {
 
   const unreadCount = alerts.filter(a => a.status === 'unread').length
 
-  if (loading) {
-    return <div className="text-center py-20 text-gray-400">Loading alerts…</div>
-  }
+  if (loading) return <div className="text-center py-20 text-gray-400">Loading alerts…</div>
+  if (error) return <div className="text-center py-20 text-red-500">Error: {error}</div>
 
   if (alerts.length === 0) {
     return (

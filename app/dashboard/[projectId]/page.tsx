@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import Link from 'next/link'
 import OverviewCharts from './OverviewCharts'
 import BoqTable from './BoqTable'
 import BoqSection from './BoqSection'
@@ -89,7 +90,9 @@ export default async function OverviewPage({ params }: { params: { projectId: st
         <KpiCard label="Total Budget" value={fmt(totalBudget)} />
         <KpiCard label="Approved Invoiced" value={fmt(totalInvoiced)} />
         <KpiCard label="Budget Used" value={`${pctUsed.toFixed(1)}%`} warn={pctUsed >= threshold} />
-        <KpiCard label="Alerts" value={String(alertCount)} warn={alertCount > 0} />
+        <Link href={`/dashboard/${projectId}/alerts`} className="block">
+          <KpiCard label="Alerts" value={String(alertCount)} warn={alertCount > 0} clickable />
+        </Link>
       </div>
 
       <OverviewCharts chapterData={chapterData} cumData={cumData} currency={currency} />
@@ -101,12 +104,12 @@ export default async function OverviewPage({ params }: { params: { projectId: st
   )
 }
 
-function KpiCard({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
+function KpiCard({ label, value, warn, clickable }: { label: string; value: string; warn?: boolean; clickable?: boolean }) {
   return (
-    <div className={`bg-white rounded-xl border p-5 ${warn ? 'border-amber-200' : 'border-gray-200'}`}>
+    <div className={`bg-white rounded-xl border p-5 transition-shadow ${warn ? 'border-amber-200' : 'border-gray-200'} ${clickable ? 'hover:shadow-md cursor-pointer' : ''}`}>
       <p className="text-xs text-gray-400 font-medium uppercase tracking-wider">{label}</p>
       <p className={`text-2xl font-bold mt-2 ${warn ? 'text-amber-600' : 'text-gray-900'}`}>{value}</p>
-      {warn && <p className="text-xs text-amber-500 mt-1">Needs attention</p>}
+      {warn ? <p className="text-xs text-amber-500 mt-1">Needs attention →</p> : clickable && <p className="text-xs text-gray-400 mt-1">View alerts →</p>}
     </div>
   )
 }
