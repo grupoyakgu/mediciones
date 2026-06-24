@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createServerClient } from '@supabase/ssr'
 
 export const maxDuration = 60
 
@@ -9,12 +9,18 @@ export const maxDuration = 60
 const PAGE = 100
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { projectId: string } }
 ) {
-  const supabase = createClient(
+  const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll: () => req.cookies.getAll(),
+        setAll: () => {},
+      },
+    }
   )
 
   const all: Record<string, unknown>[] = []
@@ -33,8 +39,6 @@ export async function GET(
 
     all.push(...data)
     from += PAGE
-    // Do NOT break when data.length < PAGE: Supabase max_rows may have
-    // truncated the page without it being the last page of real data.
   }
 
   return NextResponse.json({ items: all })
