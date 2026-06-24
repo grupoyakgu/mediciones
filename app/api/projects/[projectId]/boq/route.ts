@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
+export const maxDuration = 60
+
 // PAGE must stay at or below Supabase's max_rows setting (default 100).
 // We never break on data.length < PAGE because max_rows truncates responses
 // silently — we only stop when a page comes back empty.

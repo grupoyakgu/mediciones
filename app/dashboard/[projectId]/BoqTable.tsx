@@ -137,11 +137,17 @@ export default function BoqTable({ projectId }: { projectId: string }) {
   const td = (right = false, muted = false): React.CSSProperties => ({ padding: '.55rem 1rem', fontSize: '.85rem', borderBottom: '1px solid #f1f5f9', textAlign: right ? 'right' : 'left', color: muted ? '#94a3b8' : '#1e293b', whiteSpace: right ? 'nowrap' : 'normal' })
 
   if (loading) return <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0' }}>Loading BOQ…</div>
-  if (error) return <div style={{ padding: '1.5rem', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px', color: '#dc2626' }}>Error loading BOQ: {error}</div>
+  if (error) return (
+    <div style={{ padding: '1.5rem', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px', color: '#dc2626' }}>
+      <p style={{ margin: '0 0 .75rem', fontWeight: 600 }}>Error loading BOQ</p>
+      <p style={{ margin: '0 0 1rem', fontSize: '.875rem', fontFamily: 'monospace', wordBreak: 'break-all' }}>{error}</p>
+      <button onClick={loadBoq} style={{ padding: '.4rem .9rem', background: '#dc2626', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '.85rem' }}>Retry</button>
+    </div>
+  )
   if (items.length === 0) return (
     <div style={{ ...card, textAlign: 'center', padding: '3rem 2rem', color: '#94a3b8', border: '2px dashed #e2e8f0' }}>
       <div style={{ fontSize: '2rem', marginBottom: '.75rem' }}>📂</div>
-      <p style={{ margin: 0 }}>No BOQ loaded. Go to <a href="settings" style={{ color: '#2563eb', fontWeight: 500 }}>Settings</a> to upload a BOQ file.</p>
+      <p style={{ margin: 0 }}>No BOQ items found. Upload a BOQ file above or go to <a href="settings" style={{ color: '#2563eb', fontWeight: 500 }}>Settings</a>.</p>
     </div>
   )
 
