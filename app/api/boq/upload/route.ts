@@ -12,6 +12,7 @@ interface BoqRow {
   unit_price: number | null
   total_amount: number | null
   numbering_anomaly: boolean
+  file_line: number
 }
 
 function toNum(v: unknown): number | null {
@@ -39,7 +40,8 @@ function parseXlsx(buffer: ArrayBuffer): BoqRow[] {
   const items: BoqRow[] = []
   let lastChapterCode = ''
 
-  for (const row of rawRows) {
+  for (let lineIdx = 0; lineIdx < rawRows.length; lineIdx++) {
+    const row = rawRows[lineIdx]
     if (!Array.isArray(row)) continue
     const code = String(row[0] ?? '').trim()
     const nat  = String(row[1] ?? '').trim()
@@ -63,6 +65,7 @@ function parseXlsx(buffer: ArrayBuffer): BoqRow[] {
         unit_price:        toNum(row[5]),
         total_amount:      toNum(row[6]),
         numbering_anomaly: anomaly,
+        file_line:         lineIdx + 1,
       })
     }
   }
@@ -76,8 +79,8 @@ function parseCsv(text: string): BoqRow[] {
   const items: BoqRow[] = []
   let lastChapterCode = ''
 
-  for (const line of lines) {
-    const cols = line.split(',')
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const cols = lines[lineIdx].split(',')
     const code = cols[0]?.trim() ?? ''
     const nat  = cols[1]?.trim() ?? ''
     const unit = cols[2]?.trim() ?? ''
@@ -100,6 +103,7 @@ function parseCsv(text: string): BoqRow[] {
         unit_price:        toNum(cols[5]?.replace(/"/g, '').replace(/,/g, '')),
         total_amount:      toNum(cols[6]?.replace(/"/g, '').replace(/,/g, '')),
         numbering_anomaly: anomaly,
+        file_line:         lineIdx + 1,
       })
     }
   }
@@ -164,6 +168,7 @@ export async function POST(req: NextRequest) {
         quantity:     item.quantity,
         unit_price:   item.unit_price,
         total_amount: item.total_amount,
+        file_line:    item.file_line,
       }))
 
       const { error } = await supabase.from('boq_items').insert(batch)

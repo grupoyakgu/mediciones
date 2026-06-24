@@ -11,6 +11,7 @@ interface BoqItem {
   quantity: number | null
   unit_price: number | null
   total_amount: number | null
+  file_line: number | null
 }
 
 type SortField = 'description' | 'unit_price' | 'effective_total'
@@ -77,18 +78,23 @@ export default function BoqTable({ projectId }: { projectId: string }) {
     return map
   }, [items])
 
+  // Maps duplicate item_code → file line of its first occurrence
   const dupCodes = useMemo(() => {
-    const map = new Map<string, string[]>()
+    const counts = new Map<string, number>()
+    const firstLine = new Map<string, number>()
     for (const item of items) {
       if (!item.item_code) continue
-      const chapterLabel = item.chapter_id
-        ? `${item.chapter_id}${item.chapter_name ? ' – ' + item.chapter_name : ''}`
-        : (item.chapter_name ?? '?')
-      const list = map.get(item.item_code) ?? []
-      list.push(chapterLabel)
-      map.set(item.item_code, list)
+      counts.set(item.item_code, (counts.get(item.item_code) ?? 0) + 1)
+      const line = item.file_line ?? 0
+      if (!firstLine.has(item.item_code) || line < firstLine.get(item.item_code)!) {
+        firstLine.set(item.item_code, line)
+      }
     }
-    return new Map(Array.from(map.entries()).filter(([, list]) => list.length > 1))
+    const result = new Map<string, number>()
+    for (const [code, count] of Array.from(counts.entries())) {
+      if (count > 1) result.set(code, firstLine.get(code) ?? 0)
+    }
+    return result
   }, [items])
 
   const chapters = useMemo(() => {
@@ -287,9 +293,9 @@ export default function BoqTable({ projectId }: { projectId: string }) {
                                 {item.item_code && dupCodes.has(item.item_code) && (
                                   <span
                                     className="px-1 py-0.5 text-xs font-bold bg-red-600 text-white rounded leading-none cursor-help whitespace-nowrap"
-                                    title={`Duplicate of: ${item.item_code} — also in: ${dupCodes.get(item.item_code)!.filter(ch => ch !== (item.chapter_id ? `${item.chapter_id}${item.chapter_name ? ' – ' + item.chapter_name : ''}` : (item.chapter_name ?? '?'))).join(', ')}`}
+                                    title={`First occurrence at line ${dupCodes.get(item.item_code)}`}
                                   >
-                                    DUP {item.item_code}
+                                    DUP {dupCodes.get(item.item_code)}
                                   </span>
                                 )}
                               </div>

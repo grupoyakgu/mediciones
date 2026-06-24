@@ -29,7 +29,7 @@ export async function GET(
   while (true) {
     const { data, error } = await supabase
       .from('boq_items')
-      .select('id,chapter_id,chapter_name,item_code,description,unit,quantity,unit_price,total_amount')
+      .select('id,chapter_id,chapter_name,item_code,description,unit,quantity,unit_price,total_amount,file_line')
       .eq('project_id', params.projectId)
       .order('chapter_id', { ascending: true })
       .range(from, from + PAGE - 1)
