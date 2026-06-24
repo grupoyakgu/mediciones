@@ -31,7 +31,7 @@ export async function GET(
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   // Fetch invoice metadata separately to avoid PostgREST schema-cache join issues
-  const invoiceIds = [...new Set((alertRows ?? []).map(a => a.invoice_id).filter(Boolean))]
+  const invoiceIds = Array.from(new Set((alertRows ?? []).map(a => a.invoice_id).filter(Boolean)))
   const invoiceMap: Record<string, { invoice_number: string | null; supplier: string | null }> = {}
   if (invoiceIds.length) {
     const { data: invRows } = await supabase
