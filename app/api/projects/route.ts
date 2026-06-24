@@ -59,7 +59,7 @@ export async function DELETE(req: NextRequest) {
   if (boqIds && boqIds.length > 0) {
     const ids = boqIds.map((r: { id: string }) => r.id)
     const { error: iiErr } = await supabase
-      .from('invoice_item')
+      .from('invoice_items')
       .delete()
       .in('boq_item_id', ids)
     if (iiErr) return NextResponse.json({ error: iiErr.message }, { status: 500 })
