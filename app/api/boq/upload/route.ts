@@ -169,7 +169,8 @@ export async function POST(req: NextRequest) {
           send({ imported, total: items.length })
         }
 
-        await supabase.from('projects').update({ boq_uploaded: true, boq_file_name: file.name }).eq('id', projectId)
+        const { error: updateError } = await supabase.from('projects').update({ boq_uploaded: true }).eq('id', projectId)
+        if (updateError) throw new Error('Failed to mark BOQ as uploaded: ' + updateError.message)
         send({ done: true, count: imported })
       } catch (err) {
         console.error('[boq/upload]', err)
