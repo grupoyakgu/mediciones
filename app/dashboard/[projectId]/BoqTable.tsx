@@ -77,6 +77,14 @@ export default function BoqTable({ projectId }: { projectId: string }) {
     return map
   }, [items])
 
+  const dupCodes = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const item of items) {
+      if (item.item_code) counts.set(item.item_code, (counts.get(item.item_code) ?? 0) + 1)
+    }
+    return new Set(Array.from(counts.entries()).filter(([, n]) => n > 1).map(([code]) => code))
+  }, [items])
+
   const chapters = useMemo(() => {
     const q = search.toLowerCase().trim()
     const min = parseFloat(minPrice)
@@ -115,6 +123,7 @@ export default function BoqTable({ projectId }: { projectId: string }) {
         name: chapterMeta.get(id) ?? id,
         items: chItems.slice().sort((a, b) => (a.item_code ?? '').localeCompare(b.item_code ?? '', undefined, { numeric: true })),
         subtotal: chItems.reduce((s, i) => s + effectiveTotal(i), 0),
+        hasDup: chItems.some(i => i.item_code && dupCodes.has(i.item_code)),
       }))
   }, [items, search, minPrice, maxPrice, sortField, sortDir, chapterMeta])
 
@@ -227,6 +236,9 @@ export default function BoqTable({ projectId }: { projectId: string }) {
                   <span className="font-semibold text-gray-900 text-sm">
                     {ch.id !== '__none__' ? `${ch.id} – ` : ''}{ch.name}
                   </span>
+                  {ch.hasDup && (
+                    <span className="flex-shrink-0 px-1.5 py-0.5 text-xs font-bold bg-red-600 text-white rounded">DUP</span>
+                  )}
                   <span className="text-xs text-gray-400 flex-shrink-0">({ch.items.length} items)</span>
                 </div>
                 <div className="flex items-center gap-6 flex-shrink-0 ml-4">
@@ -261,8 +273,15 @@ export default function BoqTable({ projectId }: { projectId: string }) {
                       {ch.items.map(item => {
                         const total = effectiveTotal(item)
                         return (
-                          <tr key={item.id} className="hover:bg-gray-50/60">
-                            <td className="px-4 py-2 text-gray-500 font-mono">{item.item_code ?? '—'}</td>
+                          <tr key={item.id} className={`hover:bg-gray-50/60${item.item_code && dupCodes.has(item.item_code) ? ' bg-red-50/40' : ''}`}>
+                            <td className="px-4 py-2 text-gray-500 font-mono">
+                              <div className="flex items-center gap-1.5">
+                                {item.item_code ?? '—'}
+                                {item.item_code && dupCodes.has(item.item_code) && (
+                                  <span className="px-1 py-0.5 text-xs font-bold bg-red-600 text-white rounded leading-none">DUP</span>
+                                )}
+                              </div>
+                            </td>
                             <td className="px-4 py-2 text-gray-800 max-w-xs">
                               <div className="truncate" title={item.description}>{item.description}</div>
                             </td>
