@@ -402,7 +402,8 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
       if (alertsError) throw alertsError
       const recipients: string[] = (project as { email_recipients?: string[] } | null)?.email_recipients ?? []
       const projectName: string = (project as { name?: string } | null)?.name ?? projectId
-      await sendAlertEmail(recipients, projectName, invoiceData.invoice_number ?? null, emailAlerts).catch(() => {})
+      // Fire-and-forget — don't block the response waiting for Resend API
+      sendAlertEmail(recipients, projectName, invoiceData.invoice_number ?? null, emailAlerts).catch(() => {})
     }
 
     return NextResponse.json({ success: true, invoiceId: invoice.id, itemCount: itemRows.length, alertCount: alertRows.length })

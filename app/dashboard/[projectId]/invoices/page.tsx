@@ -177,8 +177,8 @@ export default function InvoicesPage() {
 
     // Phases 1 is real XHR upload progress.
     // Phases 2-5 are server-side — simulated with realistic timings, snapped to 100% on response.
-    // Phase durations (ms): [—, 600, 25000, 1500, 1200]
-    const phaseDurations = [0, 600, 25000, 1500, 1200]
+    // Phase durations (ms): [—, 600, 25000, 3000, 4000]
+    const phaseDurations = [0, 600, 25000, 3000, 4000]
     let phaseTimer: ReturnType<typeof setInterval> | null = null
 
     function startPhase(idx: number) {
@@ -215,10 +215,10 @@ export default function InvoicesPage() {
     xhr.upload.onload = () => {
       // File sent — move to phase 2 (PDF conversion), then 3 (Claude), etc.
       setUploadPhaseProgress(100)
-      setTimeout(() => startPhase(1), 100)   // converting
-      setTimeout(() => startPhase(2), 700)   // Claude AI
-      setTimeout(() => startPhase(3), 700 + 25000) // DB write (only reached if Claude is slow)
-      setTimeout(() => startPhase(4), 700 + 25000 + 1500) // alerts
+      setTimeout(() => startPhase(1), 100)              // converting
+      setTimeout(() => startPhase(2), 700)              // Claude AI
+      setTimeout(() => startPhase(3), 700 + 25000)      // DB write
+      setTimeout(() => startPhase(4), 700 + 25000 + 3000) // alerts
     }
 
     xhr.onload = async () => {
