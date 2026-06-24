@@ -179,12 +179,10 @@ export default function InvoicesPage() {
     // Phases 2-5 are server-side — simulated with realistic timings, snapped to 100% on response.
     // Phase durations (ms): [—, 600, 25000, 1500, 1200]
     const phaseDurations = [0, 600, 25000, 1500, 1200]
-    let activePhase = 0
     let phaseTimer: ReturnType<typeof setInterval> | null = null
 
     function startPhase(idx: number) {
       if (phaseTimer) clearInterval(phaseTimer)
-      activePhase = idx
       setUploadPhaseIdx(idx)
       setUploadPhaseProgress(0)
       if (idx === 0) return // phase 0 driven by XHR progress events
