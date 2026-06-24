@@ -159,7 +159,7 @@ export async function POST(req: NextRequest) {
 
     const { error: updateError } = await supabase
       .from('projects')
-      .update({ boq_uploaded: true, boq_file_name: file.name })
+      .update({ boq_file_name: file.name })
       .eq('id', projectId)
 
     if (updateError) return NextResponse.json({ error: 'BOQ imported but failed to save filename: ' + updateError.message }, { status: 500 })
