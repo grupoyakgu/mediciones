@@ -1,7 +1,10 @@
 import { Resend } from 'resend'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
 const FROM = process.env.RESEND_FROM_EMAIL ?? 'alerts@mediciones.app'
+
+function getResend() {
+  return new Resend(process.env.RESEND_API_KEY)
+}
 
 export async function sendAlertEmail(
   recipients: string[],
@@ -15,7 +18,7 @@ export async function sendAlertEmail(
     .map(a => `<tr><td style="padding:6px 12px;border-bottom:1px solid #f1f5f9">${a.description}</td><td style="padding:6px 12px;border-bottom:1px solid #f1f5f9;color:#dc2626">${a.details}</td></tr>`)
     .join('')
 
-  await resend.emails.send({
+  await getResend().emails.send({
     from: FROM,
     to: recipients,
     subject: `⚠ Budget alert — ${projectName} · Invoice ${invoiceNumber ?? '—'}`,
@@ -25,8 +28,8 @@ export async function sendAlertEmail(
         <p style="color:#475569">Project: <strong>${projectName}</strong> · Invoice: <strong>${invoiceNumber ?? '—'}</strong></p>
         <table style="width:100%;border-collapse:collapse;margin-top:16px">
           <thead><tr style="background:#f8fafc">
-            <th style="padding:8px 12px;text-align:left;font-size:12px;color:#64748b;text-transform:uppercase">Chapter</th>
-            <th style="padding:8px 12px;text-align:left;font-size:12px;color:#64748b;text-transform:uppercase">Issue</th>
+            <th style="padding:8px 12px;text-align:left;font-size:12px;color:#64748b;text-transform:uppercase">Alert</th>
+            <th style="padding:8px 12px;text-align:left;font-size:12px;color:#64748b;text-transform:uppercase">Type</th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>

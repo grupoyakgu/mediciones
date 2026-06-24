@@ -3,7 +3,11 @@ import { chatArchitect } from "@/lib/architect-agent";
 import { TelegramClient } from "@/lib/telegram";
 import { parseFile, isSupportedFile } from "@/lib/file-parser";
 
-const telegram = new TelegramClient(process.env.ARCHITECT_BOT_TOKEN);
+let _telegram: TelegramClient | null = null;
+function getTelegram() {
+  if (!_telegram) _telegram = new TelegramClient(process.env.ARCHITECT_BOT_TOKEN);
+  return _telegram;
+}
 const BOT_USERNAME = "@GYArchitect_bot";
 
 function isMentioned(
@@ -39,11 +43,11 @@ export async function POST(req: NextRequest) {
 
       if (mentioned && isSupportedFile(doc.mime_type ?? "", doc.file_name ?? "")) {
         try {
-          const buffer = await telegram.downloadFile(doc.file_id);
+          const buffer = await getTelegram().downloadFile(doc.file_id);
           const content = await parseFile(buffer, doc.mime_type ?? "", doc.file_name ?? "");
           userMessage = `[Archivo recibido: ${doc.file_name}]\n${caption ? `Nota: ${caption}\n` : ""}\n${content}`;
         } catch {
-          await telegram.sendMessage(chatId, `❌ No se pudo leer el archivo ${doc.file_name}. Formatos soportados: PDF, CSV, XLSX, XLS.`);
+          await getTelegram().sendMessage(chatId, `❌ No se pudo leer el archivo ${doc.file_name}. Formatos soportados: PDF, CSV, XLSX, XLS.`);
           return NextResponse.json({ ok: true });
         }
       }
@@ -56,7 +60,7 @@ export async function POST(req: NextRequest) {
 
     if (userMessage) {
       const reply = await chatArchitect(chatId, userMessage);
-      await telegram.sendMessage(chatId, reply);
+      await getTelegram().sendMessage(chatId, reply);
     }
   } catch (err) {
     console.error("[GYArchitect_bot] error:", err);

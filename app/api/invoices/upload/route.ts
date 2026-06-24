@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { isSupportedFile, parseFile } from '@/lib/file-parser'
 import { claudeCreate } from '@/lib/claude'
+import { sendAlertEmail } from '@/lib/email'
 
 interface SubItem {
   description: string
@@ -218,9 +219,10 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
       }
     )
 
-    const [{ data: boqItems }, { data: existingInvoices }] = await Promise.all([
+    const [{ data: boqItems }, { data: existingInvoices }, { data: project }] = await Promise.all([
       supabase.from('boq_items').select('id, description, chapter_name, item_code, quantity, total_amount').eq('project_id', projectId),
       supabase.from('invoices').select('id, invoice_number').eq('project_id', projectId),
+      supabase.from('projects').select('name, email_recipients').eq('id', projectId).single(),
     ])
 
     const { data: invoice, error: invoiceError } = await supabase
@@ -388,6 +390,11 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
     if (alertRows.length) {
       const { error: alertsError } = await supabase.from('alerts').insert(alertRows)
       if (alertsError) throw alertsError
+
+      const recipients: string[] = (project as { email_recipients?: string[] } | null)?.email_recipients ?? []
+      const projectName: string = (project as { name?: string } | null)?.name ?? projectId
+      const emailAlerts = alertRows.map(r => ({ description: r.description, details: r.type }))
+      sendAlertEmail(recipients, projectName, invoiceData.invoice_number ?? null, emailAlerts).catch(() => {})
     }
 
     return NextResponse.json({ success: true, invoiceId: invoice.id, itemCount: itemRows.length, alertCount: alertRows.length })
