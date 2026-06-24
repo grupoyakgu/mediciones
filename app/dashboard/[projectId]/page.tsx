@@ -95,11 +95,11 @@ export default async function OverviewPage({ params }: { params: { projectId: st
     .sort((a, b) => b.budget - a.budget)
     .slice(0, 10)
 
-  const cumData: { date: string; cumulative: number }[] = []
+  const cumData: { date: string; cumulative: number; invoiceId: string }[] = []
   let running = 0
   for (const inv of invoices ?? []) {
     running += inv.total_amount ?? 0
-    cumData.push({ date: inv.created_at.slice(0, 10), cumulative: running })
+    cumData.push({ date: inv.created_at.slice(0, 10), cumulative: running, invoiceId: inv.id })
   }
 
   const fmt = (n: number) => new Intl.NumberFormat('es-ES', { style: 'currency', currency }).format(n)
@@ -126,7 +126,7 @@ export default async function OverviewPage({ params }: { params: { projectId: st
         </div>
       )}
 
-      <OverviewCharts chapterData={chapterData} cumData={cumData} currency={currency} />
+      <OverviewCharts projectId={projectId} chapterData={chapterData} cumData={cumData} currency={currency} />
 
       <BoqSection projectId={projectId} boqUploaded={boqUploaded} />
 
