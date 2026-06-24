@@ -606,10 +606,10 @@ export default function InvoicesPage() {
                               </span>
                             )}
                             {!alert && hasLowSubItems && !allLowApproved && (
-                              <span style={{ background: '#fef3c7', color: '#92400e', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.75rem', fontWeight: 600 }}>⚠ REVIEW REQUIRED</span>
+                              <span style={{ background: '#fee2e2', color: '#dc2626', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.75rem', fontWeight: 600 }}>⚠ APPROVAL NEEDED</span>
                             )}
                             {!alert && (!hasLowSubItems || allLowApproved) && (
-                              <span style={{ color: '#94a3b8', fontSize: '.75rem' }}>✓ OK</span>
+                              <span style={{ background: '#dcfce7', color: '#15803d', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.75rem', fontWeight: 600 }}>✓ OK</span>
                             )}
                           </td>
                         </tr>
