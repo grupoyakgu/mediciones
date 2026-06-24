@@ -606,7 +606,7 @@ export default function InvoicesPage() {
                               </span>
                             )}
                             {!alert && hasLowSubItems && !allLowApproved && (
-                              <span style={{ background: '#fee2e2', color: '#dc2626', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.75rem', fontWeight: 600 }}>⚠ APPROVAL NEEDED</span>
+                              <span style={{ background: '#fee2e2', color: '#dc2626', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.75rem', fontWeight: 600 }}>⚠</span>
                             )}
                             {!alert && (!hasLowSubItems || allLowApproved) && (
                               <span style={{ background: '#dcfce7', color: '#15803d', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.75rem', fontWeight: 600 }}>✓ OK</span>
