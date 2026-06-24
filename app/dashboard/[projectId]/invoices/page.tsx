@@ -116,8 +116,8 @@ export default function InvoicesPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
-  const [uploadProgress, setUploadProgress] = useState(0)
-  const [uploadPhase, setUploadPhase] = useState<'uploading' | 'processing'>('uploading')
+  const [uploadPhaseIdx, setUploadPhaseIdx] = useState(0)
+  const [uploadPhaseProgress, setUploadPhaseProgress] = useState(0)
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
 
   const [search, setSearch] = useState('')
@@ -171,9 +171,36 @@ export default function InvoicesPage() {
     const file = e.target.files?.[0]
     if (!file) return
     setUploading(true)
-    setUploadProgress(0)
-    setUploadPhase('uploading')
+    setUploadPhaseIdx(0)
+    setUploadPhaseProgress(0)
     setMsg(null)
+
+    // Phases 1 is real XHR upload progress.
+    // Phases 2-5 are server-side — simulated with realistic timings, snapped to 100% on response.
+    // Phase durations (ms): [—, 600, 25000, 1500, 1200]
+    const phaseDurations = [0, 600, 25000, 1500, 1200]
+    let activePhase = 0
+    let phaseTimer: ReturnType<typeof setInterval> | null = null
+
+    function startPhase(idx: number) {
+      if (phaseTimer) clearInterval(phaseTimer)
+      activePhase = idx
+      setUploadPhaseIdx(idx)
+      setUploadPhaseProgress(0)
+      if (idx === 0) return // phase 0 driven by XHR progress events
+      const duration = phaseDurations[idx] ?? 1000
+      const steps = 60
+      const interval = duration / steps
+      let step = 0
+      phaseTimer = setInterval(() => {
+        step++
+        // Ease-out: progress slows near 95% to leave room for real completion
+        const p = Math.min(Math.round((step / steps) * 95), 95)
+        setUploadPhaseProgress(p)
+        if (step >= steps) clearInterval(phaseTimer!)
+      }, interval)
+    }
+
     const fd = new FormData()
     fd.append('file', file)
     fd.append('projectId', projectId)
@@ -183,28 +210,23 @@ export default function InvoicesPage() {
 
     xhr.upload.onprogress = (ev) => {
       if (ev.lengthComputable) {
-        // Phase 1: file upload fills 0–50%
-        setUploadProgress(Math.round((ev.loaded / ev.total) * 50))
+        setUploadPhaseProgress(Math.round((ev.loaded / ev.total) * 100))
       }
     }
 
     xhr.upload.onload = () => {
-      // File sent — switch to processing phase, animate 50→95%
-      setUploadPhase('processing')
-      setUploadProgress(50)
-      let p = 50
-      const tick = setInterval(() => {
-        p = Math.min(p + 3, 95)
-        setUploadProgress(p)
-        if (p >= 95) clearInterval(tick)
-      }, 300)
-      ;(xhr as XMLHttpRequest & { _tick?: ReturnType<typeof setInterval> })._tick = tick
+      // File sent — move to phase 2 (PDF conversion), then 3 (Claude), etc.
+      setUploadPhaseProgress(100)
+      setTimeout(() => startPhase(1), 100)   // converting
+      setTimeout(() => startPhase(2), 700)   // Claude AI
+      setTimeout(() => startPhase(3), 700 + 25000) // DB write (only reached if Claude is slow)
+      setTimeout(() => startPhase(4), 700 + 25000 + 1500) // alerts
     }
 
     xhr.onload = async () => {
-      const t = (xhr as XMLHttpRequest & { _tick?: ReturnType<typeof setInterval> })._tick
-      if (t) clearInterval(t)
-      setUploadProgress(100)
+      if (phaseTimer) clearInterval(phaseTimer)
+      setUploadPhaseIdx(4)
+      setUploadPhaseProgress(100)
       const data = JSON.parse(xhr.responseText)
       if (xhr.status >= 200 && xhr.status < 300) {
         setMsg({ type: 'ok', text: `✅ Invoice processed: ${data.itemCount} items, ${data.alertCount} alerts` })
@@ -221,11 +243,13 @@ export default function InvoicesPage() {
     }
 
     xhr.onerror = () => {
+      if (phaseTimer) clearInterval(phaseTimer)
       setMsg({ type: 'err', text: 'Network error during upload' })
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ''
     }
 
+    startPhase(0)
     xhr.send(fd)
   }
 
@@ -426,51 +450,61 @@ export default function InvoicesPage() {
             disabled={uploading}
             style={{ padding: '.5rem 1.25rem', background: uploading ? '#94a3b8' : '#0f172a', color: 'white', border: 'none', borderRadius: '8px', fontSize: '.875rem', fontWeight: 500, cursor: uploading ? 'not-allowed' : 'pointer' }}
           >
-            {uploading ? (uploadPhase === 'uploading' ? '⬆️ Uploading…' : '⚙️ Processing…') : '+ Upload Invoice'}
+            {uploading ? ['⬆️ Uploading…', '🔄 Converting…', '🤖 AI Extracting…', '💾 Saving…', '🔔 Generating Alerts…'][uploadPhaseIdx] : '+ Upload Invoice'}
           </button>
         </div>
       </div>
 
-      {uploading && (
-        <div style={{ marginBottom: '1rem', background: 'white', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '1rem' }}>
-          {/* Phase labels */}
-          <div style={{ display: 'flex', gap: '0', marginBottom: '.5rem' }}>
-            {(['uploading', 'processing'] as const).map((phase, i) => (
-              <div key={phase} style={{ flex: 1, textAlign: i === 0 ? 'left' : 'right' }}>
-                <span style={{
-                  fontSize: '.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.04em',
-                  color: uploadPhase === phase ? '#2563eb' : uploadProgress === 100 ? '#15803d' : '#cbd5e1',
-                }}>
-                  {phase === 'uploading' ? '① File Uploading' : '② Data Processing'}
-                </span>
-              </div>
-            ))}
+      {uploading && (() => {
+        const phases = [
+          { label: 'File Uploading',     color: '#3b82f6', icon: '⬆️' },
+          { label: 'Converting PDF',     color: '#8b5cf6', icon: '🔄' },
+          { label: 'AI Extraction',      color: '#f59e0b', icon: '🤖' },
+          { label: 'Saving to DB',       color: '#10b981', icon: '💾' },
+          { label: 'Generating Alerts',  color: '#ef4444', icon: '🔔' },
+        ]
+        return (
+          <div style={{ marginBottom: '1rem', background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '1.1rem 1.25rem' }}>
+            {/* Phase rows */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '.55rem' }}>
+              {phases.map((ph, i) => {
+                const isDone    = i < uploadPhaseIdx
+                const isActive  = i === uploadPhaseIdx
+                const isPending = i > uploadPhaseIdx
+                const pct = isDone ? 100 : isActive ? uploadPhaseProgress : 0
+                return (
+                  <div key={i}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '.6rem', marginBottom: '.25rem' }}>
+                      <span style={{ fontSize: '.8rem', width: '1.2rem', textAlign: 'center' }}>
+                        {isDone ? '✅' : ph.icon}
+                      </span>
+                      <span style={{
+                        fontSize: '.75rem', fontWeight: 600,
+                        color: isDone ? '#15803d' : isActive ? ph.color : '#cbd5e1',
+                        flex: 1,
+                      }}>
+                        {ph.label}
+                      </span>
+                      <span style={{ fontSize: '.7rem', color: isPending ? '#e2e8f0' : isDone ? '#15803d' : ph.color, fontVariantNumeric: 'tabular-nums' }}>
+                        {isDone ? '100%' : isActive ? `${pct}%` : '—'}
+                      </span>
+                    </div>
+                    <div style={{ height: '5px', background: '#f1f5f9', borderRadius: '999px', overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%',
+                        width: `${pct}%`,
+                        background: isDone ? '#22c55e' : ph.color,
+                        borderRadius: '999px',
+                        transition: isDone ? 'none' : 'width .25s ease',
+                      }} />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </div>
-          {/* Track */}
-          <div style={{ position: 'relative', height: '8px', background: '#e2e8f0', borderRadius: '999px', overflow: 'hidden' }}>
-            {/* Phase 1 fill (blue) */}
-            <div style={{
-              position: 'absolute', left: 0, top: 0, height: '100%',
-              width: `${Math.min(uploadProgress, 50) * 2}%`,
-              background: '#2563eb', borderRadius: '999px', transition: 'width .2s ease',
-            }} />
-            {/* Phase 2 fill (green) overlaid on right half */}
-            {uploadProgress > 50 && (
-              <div style={{
-                position: 'absolute', left: '50%', top: 0, height: '100%',
-                width: `${(uploadProgress - 50) * 2}%`,
-                background: '#16a34a', borderRadius: '999px', transition: 'width .3s ease',
-              }} />
-            )}
-            {/* Divider tick */}
-            <div style={{ position: 'absolute', left: '50%', top: 0, width: '2px', height: '100%', background: 'white', transform: 'translateX(-50%)' }} />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '.35rem', fontSize: '.72rem', color: '#94a3b8' }}>
-            <span>{Math.min(uploadProgress, 50) * 2}%</span>
-            <span>{uploadProgress > 50 ? `${(uploadProgress - 50) * 2}%` : '0%'}</span>
-          </div>
-        </div>
-      )}
+        )
+      })()}
 
       {msg && (
         <div style={{ padding: '.875rem 1rem', borderRadius: '8px', marginBottom: '1.25rem', fontSize: '.875rem', background: msg.type === 'ok' ? '#f0fdf4' : '#fef2f2', border: `1px solid ${msg.type === 'ok' ? '#bbf7d0' : '#fecaca'}`, color: msg.type === 'ok' ? '#15803d' : '#dc2626' }}>
