@@ -4,6 +4,7 @@ import Link from 'next/link'
 import OverviewCharts from './OverviewCharts'
 import BoqTable from './BoqTable'
 import BoqSection from './BoqSection'
+import ProjectHeader from './ProjectHeader'
 
 function makeSupabase() {
   const cookieStore = cookies()
@@ -105,10 +106,7 @@ export default async function OverviewPage({ params }: { params: { projectId: st
 
   return (
     <div className="space-y-8">
-      <div className="border-b border-gray-200 pb-6">
-        <h1 className="text-xl font-semibold text-gray-900">{projectName}</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Overview · approved invoices only</p>
-      </div>
+      <ProjectHeader projectId={projectId} initialName={projectName} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard label="Total Budget" value={fmt(totalBudget)} />
