@@ -3,7 +3,6 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { isSupportedFile, parseFile } from '@/lib/file-parser'
 import { claudeCreate } from '@/lib/claude'
-import { sendAlertEmail } from '@/lib/email'
 
 interface SubItem {
   description: string
@@ -202,9 +201,8 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
       }
     )
 
-    const [{ data: boqItems }, { data: project }, { data: existingInvoices }] = await Promise.all([
+    const [{ data: boqItems }, { data: existingInvoices }] = await Promise.all([
       supabase.from('boq_items').select('id, description, chapter_name, item_code, quantity').eq('project_id', projectId),
-      supabase.from('projects').select('name, email_recipients').eq('id', projectId).single(),
       supabase.from('invoices').select('id, invoice_number').eq('project_id', projectId),
     ])
 
@@ -256,7 +254,6 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
     // Generate alerts: not_in_boq items + quantity overruns
     const boqQtyMap = new Map((boqItems ?? []).map(b => [b.id, b.quantity]))
     const matchedBoqIds = itemRows.filter(r => r.boq_item_id).map(r => r.boq_item_id as string)
-    const emailAlerts: { description: string; details: string }[] = []
     const alertRows: { project_id: string; invoice_id: string; type: string; description: string }[] = []
 
     // Duplicate invoice number alert
@@ -266,10 +263,6 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
         invoice_id: invoice.id,
         type: 'duplicate_invoice',
         description: `Duplicate invoice number: ${invoiceData.invoice_number ?? '9999'} was already uploaded`,
-      })
-      emailAlerts.push({
-        description: `Invoice #${invoiceData.invoice_number ?? '9999'}`,
-        details: 'Duplicate invoice number — already exists in this project',
       })
     }
 
@@ -282,7 +275,6 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
           type: 'not_in_boq',
           description: `Not found in BOQ: ${row.description}`,
         })
-        emailAlerts.push({ description: row.description, details: 'Item not found in BOQ' })
       }
     }
 
@@ -313,7 +305,6 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
             type: 'quantity_overrun',
             description: `Quantity overrun: ${row.description} — ${details}`,
           })
-          emailAlerts.push({ description: row.description, details })
         }
       }
     }
@@ -321,9 +312,6 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
     if (alertRows.length) {
       const { error: alertsError } = await supabase.from('alerts').insert(alertRows)
       if (alertsError) throw alertsError
-      const recipients: string[] = (project as { email_recipients?: string[] } | null)?.email_recipients ?? []
-      const projectName: string = (project as { name?: string } | null)?.name ?? projectId
-      await sendAlertEmail(recipients, projectName, invoiceData.invoice_number ?? null, emailAlerts).catch(() => {})
     }
 
     const alertCount = alertRows.length

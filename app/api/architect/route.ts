@@ -5,7 +5,7 @@ import { parseFile, isSupportedFile } from "@/lib/file-parser";
 
 let telegram: TelegramClient | null = null;
 function getTelegram() {
-  if (!telegram) telegram = new TelegramClient(process.env.ARCHITECT_BOT_TOKEN);
+  if (!telegram) telegram = new TelegramClient();
   return telegram;
 }
 const BOT_USERNAME = "@GYArchitect_bot";

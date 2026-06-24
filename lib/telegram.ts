@@ -19,4 +19,16 @@ export class TelegramClient {
       throw new Error(`Telegram sendMessage failed (${res.status}): ${error}`);
     }
   }
+
+  async downloadFile(fileId: string): Promise<Buffer> {
+    const metaRes = await fetch(`${this.apiBase}/getFile?file_id=${fileId}`)
+    if (!metaRes.ok) throw new Error(`getFile failed: ${metaRes.status}`)
+    const meta = await metaRes.json()
+    const filePath: string = meta.result?.file_path
+    if (!filePath) throw new Error('No file_path in getFile response')
+    const token = process.env.ARCHITECT_BOT_TOKEN ?? process.env.TELEGRAM_BOT_TOKEN
+    const fileRes = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`)
+    if (!fileRes.ok) throw new Error(`File download failed: ${fileRes.status}`)
+    return Buffer.from(await fileRes.arrayBuffer())
+  }
 }
