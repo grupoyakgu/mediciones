@@ -27,7 +27,7 @@ export default async function OverviewPage({ params }: { params: { projectId: st
 
   const [{ data: project }, { data: boqItems }, { data: invoices }] = await Promise.all([
     supabase.from('projects').select('name, currency, alert_threshold_pct, boq_file_name, boq_uploaded').eq('id', projectId).single(),
-    supabase.from('boq_items').select('id, chapter_name, total_amount').eq('project_id', projectId),
+    supabase.from('boq_items').select('id, description, chapter_name, total_amount').eq('project_id', projectId),
     // Only approved invoices count towards the summary
     supabase.from('invoices').select('id, total_amount, created_at').eq('project_id', projectId).eq('status', 'approved').order('created_at'),
   ])
