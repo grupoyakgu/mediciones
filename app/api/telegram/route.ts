@@ -9,8 +9,6 @@ import {
 } from '@/lib/agent'
 import { TelegramClient } from '@/lib/telegram'
 
-const telegram = new TelegramClient()
-
 async function handleMessage(chatId: number, text: string): Promise<string> {
   const lower = text.trim().toLowerCase()
 
@@ -93,6 +91,7 @@ export async function POST(req: NextRequest) {
     const text: string | undefined = message?.text
 
     if (chatId && text) {
+      const telegram = new TelegramClient()
       handleMessage(chatId, text)
         .then((reply) => telegram.sendMessage(chatId, reply))
         .catch((err) => console.error(`[telegram] failed for chat ${chatId}:`, err))
