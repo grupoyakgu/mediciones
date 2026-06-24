@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 
 interface BoqItem {
   id: string
@@ -42,8 +42,9 @@ export default function BoqTable({ projectId }: { projectId: string }) {
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [showSummary, setShowSummary] = useState(true)
 
-  useEffect(() => {
+  const loadBoq = useCallback(() => {
     let cancelled = false
+    setLoading(true)
     fetch(`/api/projects/${projectId}/boq`)
       .then(r => r.json())
       .then(({ items: data, error: err }) => {
@@ -55,6 +56,15 @@ export default function BoqTable({ projectId }: { projectId: string }) {
       .catch(e => { if (!cancelled) { setError(String(e)); setLoading(false) } })
     return () => { cancelled = true }
   }, [projectId])
+
+  useEffect(() => {
+    const cleanup = loadBoq()
+    window.addEventListener('boqUpdated', loadBoq)
+    return () => {
+      cleanup?.()
+      window.removeEventListener('boqUpdated', loadBoq)
+    }
+  }, [loadBoq])
 
   const topLevelNames = useMemo(() => {
     const map = new Map<string, string>()
