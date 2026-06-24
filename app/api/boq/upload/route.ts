@@ -124,10 +124,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No BOQ items found. Check that column B contains "Partida" or "Capítulo".' }, { status: 400 })
     }
 
-    const { error: delError } = await supabase
-      .from('boq_items')
-      .delete()
-      .eq('project_id', projectId)
+    // Delete invoice_items referencing old BOQ items first (FK constraint)
+    const { data: oldBoqIds } = await supabase.from('boq_items').select('id').eq('project_id', projectId)
+    if (oldBoqIds && oldBoqIds.length > 0) {
+      const ids = oldBoqIds.map((r: { id: string }) => r.id)
+      const { error: iiErr } = await supabase.from('invoice_items').delete().in('boq_item_id', ids)
+      if (iiErr) return NextResponse.json({ error: 'Failed to clear invoice item matches: ' + iiErr.message }, { status: 500 })
+    }
+
+    const { error: delError } = await supabase.from('boq_items').delete().eq('project_id', projectId)
     if (delError) return NextResponse.json({ error: 'Failed to clear existing BOQ: ' + delError.message }, { status: 500 })
 
     const BATCH = 100
@@ -154,7 +159,7 @@ export async function POST(req: NextRequest) {
 
     const { error: updateError } = await supabase
       .from('projects')
-      .update({ boq_uploaded: true })
+      .update({ boq_uploaded: true, boq_file_name: file.name })
       .eq('id', projectId)
 
     return NextResponse.json({

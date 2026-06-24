@@ -10,6 +10,7 @@ export default function SettingsPage() {
   const [uploading, setUploading] = useState(false)
   const [boqMsg, setBoqMsg] = useState('')
   const [boqFileName, setBoqFileName] = useState<string | null>(null)
+  const [confirmReplace, setConfirmReplace] = useState(false)
 
   const [projectName, setProjectName] = useState('')
   const [description, setDescription] = useState('')
@@ -40,8 +41,18 @@ export default function SettingsPage() {
 
   useEffect(() => { load() }, [load])
 
-  async function uploadBoq() {
+  function handleBoqUploadClick() {
     if (!boqFile) return
+    if (boqFileName) {
+      setConfirmReplace(true)
+    } else {
+      doUploadBoq()
+    }
+  }
+
+  async function doUploadBoq() {
+    if (!boqFile) return
+    setConfirmReplace(false)
     setUploading(true)
     setBoqMsg('')
     const fd = new FormData()
@@ -51,7 +62,7 @@ export default function SettingsPage() {
     const data = await res.json()
     setUploading(false)
     if (data.error) { setBoqMsg(`❌ ${data.error}`); return }
-    setBoqMsg(`✅ Uploaded ${data.itemCount} BOQ items`)
+    setBoqMsg(`✅ Uploaded ${data.count} BOQ items`)
     setBoqFileName(boqFile.name)
   }
 
@@ -92,6 +103,31 @@ export default function SettingsPage() {
 
   return (
     <div className="max-w-2xl space-y-8">
+
+      {/* BOQ replace confirmation modal */}
+      {confirmReplace && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: 'white', borderRadius: '14px', padding: '2rem', maxWidth: '440px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,.2)' }}>
+            <h2 style={{ margin: '0 0 .75rem', fontSize: '1.1rem', fontWeight: 700, color: '#0f172a' }}>Replace existing BOQ?</h2>
+            <p style={{ margin: '0 0 .5rem', fontSize: '.9rem', color: '#475569' }}>
+              Current file: <strong>{boqFileName}</strong>
+            </p>
+            <p style={{ margin: '0 0 1.5rem', fontSize: '.9rem', color: '#475569' }}>
+              All existing BOQ items and their invoice line-item matches will be permanently deleted before the new file is imported. This cannot be undone.
+            </p>
+            <div style={{ display: 'flex', gap: '.75rem', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setConfirmReplace(false)}
+                style={{ padding: '.5rem 1rem', background: 'none', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '.875rem', cursor: 'pointer', color: '#64748b' }}
+              >Cancel</button>
+              <button
+                onClick={doUploadBoq}
+                style={{ padding: '.5rem 1.25rem', background: '#dc2626', color: 'white', border: 'none', borderRadius: '8px', fontSize: '.875rem', fontWeight: 600, cursor: 'pointer' }}
+              >Replace BOQ</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* General Settings */}
       <div className="bg-white border border-gray-200 rounded-xl p-6">
@@ -157,7 +193,7 @@ export default function SettingsPage() {
             className="text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:text-sm file:font-medium hover:file:bg-blue-100"
           />
           <button
-            onClick={uploadBoq}
+            onClick={handleBoqUploadClick}
             disabled={!boqFile || uploading}
             className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm disabled:opacity-50 hover:bg-blue-700"
           >
