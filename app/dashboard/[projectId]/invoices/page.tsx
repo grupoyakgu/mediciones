@@ -9,6 +9,7 @@ interface Invoice {
   supplier: string | null
   invoice_date: string | null
   total_amount: number | null
+  approved_amount: number | null
   currency: string | null
   file_name: string | null
   status: string
@@ -24,6 +25,7 @@ interface SubItem {
   quantity: number | null
   unit_price: number | null
   total_amount: number | null
+  manually_approved?: boolean
 }
 
 interface BoqItem {
@@ -83,10 +85,20 @@ function chapterCoverage(subItems: SubItem[], chapterTotal: number | null, boqIt
   if (!subItems.length || !chapterTotal) return null
   let matchedAmt = 0
   for (const sub of subItems) {
-    const { tier } = matchSubItem(sub, boqItems)
-    if (tier === 'strong' || tier === 'partial') matchedAmt += sub.total_amount ?? 0
+    const { score } = matchSubItem(sub, boqItems)
+    if (score >= 51 || sub.manually_approved) matchedAmt += sub.total_amount ?? 0
   }
   return chapterTotal > 0 ? (matchedAmt / chapterTotal) * 100 : 0
+}
+function calcApprovedAmount(items: InvoiceItem[], boqItems: BoqItem[]): number {
+  let total = 0
+  for (const item of items) {
+    for (const sub of item.sub_items ?? []) {
+      const { score } = matchSubItem(sub, boqItems)
+      if (score >= 51 || sub.manually_approved) total += sub.total_amount ?? 0
+    }
+  }
+  return total
 }
 
 const fmt = (n: number | null, currency = 'EUR') =>
@@ -118,6 +130,7 @@ export default function InvoicesPage() {
   const [expandedChapter, setExpandedChapter] = useState<string | null>(null)
   const [dupInvoiceIds, setDupInvoiceIds] = useState<Set<string>>(new Set())
   const [boqItems, setBoqItems] = useState<BoqItem[]>([])
+  const [approvingSubItem, setApprovingSubItem] = useState<string | null>(null)
 
   useEffect(() => {
     loadInvoices()
@@ -171,14 +184,12 @@ export default function InvoicesPage() {
     await supabase.from('invoices').update({ status: newStatus }).eq('id', inv.id)
     setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: newStatus } : i))
     if (selectedId === inv.id) await loadDetail(inv.id, newStatus)
-    // Refresh the server-rendered overview so the KPIs update immediately
     router.refresh()
   }
 
   async function confirmAndDelete() {
     if (!confirmDelete) return
     setDeleting(true)
-    // CASCADE on DB handles invoice_items, but delete explicitly for safety
     await supabase.from('invoice_items').delete().eq('invoice_id', confirmDelete.id)
     await supabase.from('invoices').delete().eq('id', confirmDelete.id)
     setInvoices(prev => prev.filter(i => i.id !== confirmDelete.id))
@@ -187,13 +198,21 @@ export default function InvoicesPage() {
     setDeleting(false)
   }
 
+  async function saveApprovedAmount(invoiceId: string, items: InvoiceItem[], boq: BoqItem[]) {
+    const amount = calcApprovedAmount(items, boq)
+    await supabase.from('invoices').update({ approved_amount: amount }).eq('id', invoiceId)
+    setInvoices(prev => prev.map(i => i.id === invoiceId ? { ...i, approved_amount: amount } : i))
+    return amount
+  }
+
   async function loadDetail(invoiceId: string, invoiceStatus: string) {
     setDetailLoading(true)
     const [{ data: items }, { data: allBoq }] = await Promise.all([
       supabase.from('invoice_items').select('*').eq('invoice_id', invoiceId),
       supabase.from('boq_items').select('id,description,chapter_name,item_code').eq('project_id', projectId),
     ])
-    setBoqItems(allBoq ?? [])
+    const boq = allBoq ?? []
+    setBoqItems(boq)
 
     if (!items?.length) { setDetailItems([]); setDetailLoading(false); return }
 
@@ -216,7 +235,6 @@ export default function InvoicesPage() {
         .eq('project_id', projectId)
         .eq('status', 'approved')
       const approvedIds = (approvedInvs ?? []).map(i => i.id)
-      // Include current invoice qty in accumulation if it is not yet approved
       const idsToCheck = invoiceStatus !== 'approved'
         ? [...approvedIds, invoiceId]
         : approvedIds
@@ -233,13 +251,46 @@ export default function InvoicesPage() {
       }
     }
 
-    setDetailItems(items.map(item => ({
+    const built = items.map(item => ({
       ...item,
       boq_qty: item.boq_item_id ? (boqMap.get(item.boq_item_id)?.quantity ?? null) : null,
       boq_unit_price: item.boq_item_id ? (boqMap.get(item.boq_item_id)?.unit_price ?? null) : null,
       accumulated_qty: item.boq_item_id ? (accMap.get(item.boq_item_id) ?? 0) : 0,
-    })))
+    }))
+    setDetailItems(built)
+    await saveApprovedAmount(invoiceId, built, boq)
     setDetailLoading(false)
+  }
+
+  async function approveSubItem(item: InvoiceItem, subIdx: number) {
+    const key = `${item.id}-${subIdx}`
+    setApprovingSubItem(key)
+    const newSubItems = (item.sub_items ?? []).map((s, i) =>
+      i === subIdx ? { ...s, manually_approved: true } : s
+    )
+    await supabase.from('invoice_items').update({ sub_items: newSubItems }).eq('id', item.id)
+    const updatedItems = detailItems.map(di =>
+      di.id === item.id ? { ...di, sub_items: newSubItems } : di
+    )
+    setDetailItems(updatedItems)
+    await saveApprovedAmount(selectedId!, updatedItems, boqItems)
+    setApprovingSubItem(null)
+  }
+
+  async function approveChapterAll(item: InvoiceItem) {
+    const key = `${item.id}-all`
+    setApprovingSubItem(key)
+    const newSubItems = (item.sub_items ?? []).map(s => {
+      const { score } = matchSubItem(s, boqItems)
+      return score < 51 ? { ...s, manually_approved: true } : s
+    })
+    await supabase.from('invoice_items').update({ sub_items: newSubItems }).eq('id', item.id)
+    const updatedItems = detailItems.map(di =>
+      di.id === item.id ? { ...di, sub_items: newSubItems } : di
+    )
+    setDetailItems(updatedItems)
+    await saveApprovedAmount(selectedId!, updatedItems, boqItems)
+    setApprovingSubItem(null)
   }
 
   async function selectInvoice(inv: Invoice) {
@@ -369,8 +420,9 @@ export default function InvoicesPage() {
                 <th style={th(true)} onClick={() => toggleSort('number')}>Invoice #{arrow('number')}</th>
                 <th style={th()}>Supplier</th>
                 <th style={th(true)} onClick={() => toggleSort('date')}>Date{arrow('date')}</th>
-                <th style={{ ...th(true), textAlign: 'right' }} onClick={() => toggleSort('amount')}>Total{arrow('amount')}</th>
-                <th style={{ ...th(), textAlign: 'center' }}>Approved</th>
+                <th style={{ ...th(true), textAlign: 'right' }} onClick={() => toggleSort('amount')}>Total Requested{arrow('amount')}</th>
+                <th style={{ ...th(), textAlign: 'right' }}>Total Approved</th>
+                <th style={{ ...th(), textAlign: 'center' }}>Status</th>
                 <th style={th()}></th>
               </tr></thead>
               <tbody>
@@ -389,6 +441,9 @@ export default function InvoicesPage() {
                     <td style={td(false, true)}>{inv.supplier ?? '—'}</td>
                     <td style={td(false, true)}>{inv.invoice_date ?? inv.created_at.slice(0, 10)}</td>
                     <td style={{ ...td(true), fontWeight: 500 }}>{fmt(inv.total_amount, inv.currency ?? 'EUR')}</td>
+                    <td style={{ ...td(true), fontWeight: 500, color: inv.approved_amount != null ? '#15803d' : '#94a3b8' }}>
+                      {fmt(inv.approved_amount, inv.currency ?? 'EUR')}
+                    </td>
                     <td style={{ ...td(), textAlign: 'center' }}>
                       <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                         <button
@@ -451,8 +506,14 @@ export default function InvoicesPage() {
               )}
               {inv.total_amount != null && (
                 <div>
-                  <div style={{ fontSize: '.7rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '.2rem' }}>Total Certificación Sin IVA</div>
+                  <div style={{ fontSize: '.7rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '.2rem' }}>Total Requested</div>
                   <div style={{ fontWeight: 600, fontSize: '.95rem', color: '#0f172a' }}>{fmt(inv.total_amount, inv.currency ?? 'EUR')}</div>
+                </div>
+              )}
+              {inv.approved_amount != null && (
+                <div style={{ borderLeft: '2px solid #15803d', paddingLeft: '.75rem' }}>
+                  <div style={{ fontSize: '.7rem', color: '#15803d', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '.2rem' }}>Total Approved</div>
+                  <div style={{ fontWeight: 700, fontSize: '1rem', color: '#15803d' }}>{fmt(inv.approved_amount, inv.currency ?? 'EUR')}</div>
                 </div>
               )}
               {retention != null && (
@@ -492,6 +553,15 @@ export default function InvoicesPage() {
                     const coverage = hasSubItems ? chapterCoverage(item.sub_items!, item.total_amount, boqItems) : null
                     const covColor = coverage == null ? '#94a3b8' : coverage >= 90 ? '#15803d' : coverage >= 75 ? '#b45309' : '#dc2626'
                     const covBg = coverage == null ? '#f1f5f9' : coverage >= 90 ? '#dcfce7' : coverage >= 75 ? '#fef3c7' : '#fee2e2'
+
+                    // Count unapproved low-score sub-items for this chapter
+                    const lowUnnapproved = hasSubItems
+                      ? item.sub_items!.filter(s => {
+                          const { score } = matchSubItem(s, boqItems)
+                          return score < 51 && !s.manually_approved
+                        })
+                      : []
+
                     return (
                       <>
                         <tr
@@ -537,8 +607,19 @@ export default function InvoicesPage() {
                           <tr key={`${item.id}-sub`}>
                             <td colSpan={10} style={{ padding: 0, background: '#f0f7ff', borderBottom: '2px solid #bfdbfe' }}>
                               <div style={{ padding: '.75rem 1.5rem 1rem 2.5rem' }}>
-                                <div style={{ fontSize: '.75rem', fontWeight: 600, color: '#2563eb', marginBottom: '.5rem', textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                                  Line items — {item.description}
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '.5rem' }}>
+                                  <div style={{ fontSize: '.75rem', fontWeight: 600, color: '#2563eb', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                                    Line items — {item.description}
+                                  </div>
+                                  {lowUnnapproved.length > 0 && (
+                                    <button
+                                      onClick={e => { e.stopPropagation(); approveChapterAll(item) }}
+                                      disabled={approvingSubItem === `${item.id}-all`}
+                                      style={{ fontSize: '.75rem', fontWeight: 600, padding: '.3rem .75rem', background: '#0f172a', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', whiteSpace: 'nowrap', opacity: approvingSubItem === `${item.id}-all` ? 0.6 : 1 }}
+                                    >
+                                      {approvingSubItem === `${item.id}-all` ? '…' : `Approve all low-score (${lowUnnapproved.length})`}
+                                    </button>
+                                  )}
                                 </div>
                                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.82rem' }}>
                                   <thead>
@@ -549,11 +630,14 @@ export default function InvoicesPage() {
                                       <th style={{ padding: '.4rem .75rem', textAlign: 'right', fontWeight: 600, color: '#1e40af', whiteSpace: 'nowrap' }}>Unit Price</th>
                                       <th style={{ padding: '.4rem .75rem', textAlign: 'right', fontWeight: 600, color: '#1e40af', whiteSpace: 'nowrap' }}>Total</th>
                                       <th style={{ padding: '.4rem .75rem', textAlign: 'center', fontWeight: 600, color: '#1e40af', whiteSpace: 'nowrap' }}>BOQ Match</th>
+                                      <th style={{ padding: '.4rem .75rem', textAlign: 'center', fontWeight: 600, color: '#1e40af', whiteSpace: 'nowrap' }}>Action</th>
                                     </tr>
                                   </thead>
                                   <tbody>
                                     {item.sub_items!.map((sub, idx) => {
                                       const { score, tier } = matchSubItem(sub, boqItems)
+                                      const isLow = score < 51
+                                      const isManuallyApproved = !!sub.manually_approved
                                       const badgeStyle = tier === 'strong'
                                         ? { background: '#dcfce7', color: '#15803d' }
                                         : tier === 'partial'
@@ -562,8 +646,12 @@ export default function InvoicesPage() {
                                             ? { background: '#f1f5f9', color: '#64748b' }
                                             : { background: '#fee2e2', color: '#dc2626' }
                                       const tierLabel = tier === 'strong' ? `Strong ${score}%` : tier === 'partial' ? `Partial ${score}%` : tier === 'weak' ? `Weak ${score}%` : 'No Match'
+                                      const rowBg = isLow && !isManuallyApproved
+                                        ? (idx % 2 === 0 ? '#fff7ed' : '#ffedd5')
+                                        : (idx % 2 === 0 ? 'white' : '#f0f7ff')
+                                      const approveKey = `${item.id}-${idx}`
                                       return (
-                                        <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#f0f7ff' }}>
+                                        <tr key={idx} style={{ background: rowBg }}>
                                           <td style={{ padding: '.4rem .75rem', color: '#1e293b' }}>{sub.description}</td>
                                           <td style={{ padding: '.4rem .75rem', color: '#64748b', whiteSpace: 'nowrap' }}>{sub.unit ?? '—'}</td>
                                           <td style={{ padding: '.4rem .75rem', textAlign: 'right', color: '#64748b' }}>{sub.quantity?.toLocaleString('es-ES') ?? '—'}</td>
@@ -573,6 +661,23 @@ export default function InvoicesPage() {
                                             {boqItems.length > 0 ? (
                                               <span style={{ ...badgeStyle, padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.72rem', fontWeight: 600, whiteSpace: 'nowrap' }}>{tierLabel}</span>
                                             ) : <span style={{ color: '#94a3b8', fontSize: '.72rem' }}>No BOQ</span>}
+                                          </td>
+                                          <td style={{ padding: '.4rem .75rem', textAlign: 'center' }}>
+                                            {isLow ? (
+                                              isManuallyApproved ? (
+                                                <span style={{ background: '#dcfce7', color: '#15803d', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.72rem', fontWeight: 600, whiteSpace: 'nowrap' }}>✓ Approved</span>
+                                              ) : (
+                                                <button
+                                                  onClick={e => { e.stopPropagation(); approveSubItem(item, idx) }}
+                                                  disabled={approvingSubItem === approveKey}
+                                                  style={{ fontSize: '.72rem', fontWeight: 600, padding: '.2rem .6rem', background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap', opacity: approvingSubItem === approveKey ? 0.6 : 1 }}
+                                                >
+                                                  {approvingSubItem === approveKey ? '…' : 'Approve'}
+                                                </button>
+                                              )
+                                            ) : (
+                                              <span style={{ color: '#94a3b8', fontSize: '.72rem' }}>—</span>
+                                            )}
                                           </td>
                                         </tr>
                                       )
