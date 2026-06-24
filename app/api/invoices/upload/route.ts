@@ -202,9 +202,10 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
       }
     )
 
-    const [{ data: boqItems }, { data: project }] = await Promise.all([
+    const [{ data: boqItems }, { data: project }, { data: existingInvoices }] = await Promise.all([
       supabase.from('boq_items').select('id, description, chapter_name, item_code, quantity').eq('project_id', projectId),
       supabase.from('projects').select('name, email_recipients').eq('id', projectId).single(),
+      supabase.from('invoices').select('id, invoice_number').eq('project_id', projectId),
     ])
 
     const { data: invoice, error: invoiceError } = await supabase
@@ -225,6 +226,11 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
       .select('id')
       .single()
     if (invoiceError) throw invoiceError
+
+    // Check for duplicate invoice number
+    const dupInvoice = (existingInvoices ?? []).find(
+      i => i.id !== invoice.id && i.invoice_number === (invoiceData.invoice_number ?? '9999')
+    )
 
     const itemRows = invoiceData.items.map((item) => {
       const match = findBoqMatch(item.description ?? '', boqItems ?? [])
@@ -252,6 +258,20 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
     const matchedBoqIds = itemRows.filter(r => r.boq_item_id).map(r => r.boq_item_id as string)
     const emailAlerts: { description: string; details: string }[] = []
     const alertRows: { project_id: string; invoice_id: string; type: string; description: string }[] = []
+
+    // Duplicate invoice number alert
+    if (dupInvoice) {
+      alertRows.push({
+        project_id: projectId,
+        invoice_id: invoice.id,
+        type: 'duplicate_invoice',
+        description: `Duplicate invoice number: ${invoiceData.invoice_number ?? '9999'} was already uploaded`,
+      })
+      emailAlerts.push({
+        description: `Invoice #${invoiceData.invoice_number ?? '9999'}`,
+        details: 'Duplicate invoice number — already exists in this project',
+      })
+    }
 
     // Not-in-BOQ alerts
     for (const row of itemRows) {
@@ -299,7 +319,8 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
     }
 
     if (alertRows.length) {
-      await supabase.from('alerts').insert(alertRows)
+      const { error: alertsError } = await supabase.from('alerts').insert(alertRows)
+      if (alertsError) throw alertsError
       const recipients: string[] = (project as { email_recipients?: string[] } | null)?.email_recipients ?? []
       const projectName: string = (project as { name?: string } | null)?.name ?? projectId
       await sendAlertEmail(recipients, projectName, invoiceData.invoice_number ?? null, emailAlerts).catch(() => {})
