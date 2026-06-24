@@ -162,10 +162,9 @@ export async function POST(req: NextRequest) {
       .update({ boq_uploaded: true, boq_file_name: file.name })
       .eq('id', projectId)
 
-    return NextResponse.json({
-      count: imported,
-      boq_update_error: updateError ? updateError.message : null,
-    })
+    if (updateError) return NextResponse.json({ error: 'BOQ imported but failed to save filename: ' + updateError.message }, { status: 500 })
+
+    return NextResponse.json({ count: imported })
   } catch (err) {
     console.error('[boq/upload]', err)
     return NextResponse.json({ error: String(err) }, { status: 500 })
