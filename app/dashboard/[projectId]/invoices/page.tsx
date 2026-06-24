@@ -26,6 +26,15 @@ interface SubItem {
   total_amount: number | null
 }
 
+interface BoqItem {
+  id: string
+  description: string | null
+  chapter_name: string | null
+  item_code: string | null
+}
+
+type MatchTier = 'strong' | 'partial' | 'weak' | 'none'
+
 interface InvoiceItem {
   id: string
   invoice_id: string
@@ -45,6 +54,40 @@ interface InvoiceItem {
 
 type SortField = 'date' | 'amount' | 'number'
 type SortDir = 'asc' | 'desc'
+
+function normalizeStr(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+function tokenSet(s: string): Set<string> {
+  return new Set(normalizeStr(s).split(' ').filter(Boolean))
+}
+function jaccardSim(a: string, b: string): number {
+  const ta = tokenSet(a), tb = tokenSet(b)
+  if (ta.size === 0 && tb.size === 0) return 0
+  let inter = 0
+  ta.forEach(t => { if (tb.has(t)) inter++ })
+  const union = ta.size + tb.size - inter
+  return union === 0 ? 0 : inter / union
+}
+function matchSubItem(sub: SubItem, boqItems: BoqItem[]): { score: number; tier: MatchTier } {
+  if (!boqItems.length) return { score: 0, tier: 'none' }
+  let best = 0
+  for (const b of boqItems) {
+    const s = Math.round(jaccardSim(sub.description, b.description ?? '') * 100)
+    if (s > best) best = s
+  }
+  const tier: MatchTier = best >= 80 ? 'strong' : best >= 51 ? 'partial' : best > 0 ? 'weak' : 'none'
+  return { score: best, tier }
+}
+function chapterCoverage(subItems: SubItem[], chapterTotal: number | null, boqItems: BoqItem[]): number | null {
+  if (!subItems.length || !chapterTotal) return null
+  let matchedAmt = 0
+  for (const sub of subItems) {
+    const { tier } = matchSubItem(sub, boqItems)
+    if (tier === 'strong' || tier === 'partial') matchedAmt += sub.total_amount ?? 0
+  }
+  return chapterTotal > 0 ? (matchedAmt / chapterTotal) * 100 : 0
+}
 
 const fmt = (n: number | null, currency = 'EUR') =>
   n == null ? '—' : new Intl.NumberFormat('es-ES', { style: 'currency', currency }).format(n)
@@ -74,6 +117,7 @@ export default function InvoicesPage() {
   const [retentionPct, setRetentionPct] = useState(10)
   const [expandedChapter, setExpandedChapter] = useState<string | null>(null)
   const [dupInvoiceIds, setDupInvoiceIds] = useState<Set<string>>(new Set())
+  const [boqItems, setBoqItems] = useState<BoqItem[]>([])
 
   useEffect(() => {
     loadInvoices()
@@ -145,10 +189,11 @@ export default function InvoicesPage() {
 
   async function loadDetail(invoiceId: string, invoiceStatus: string) {
     setDetailLoading(true)
-    const { data: items } = await supabase
-      .from('invoice_items')
-      .select('*')
-      .eq('invoice_id', invoiceId)
+    const [{ data: items }, { data: allBoq }] = await Promise.all([
+      supabase.from('invoice_items').select('*').eq('invoice_id', invoiceId),
+      supabase.from('boq_items').select('id,description,chapter_name,item_code').eq('project_id', projectId),
+    ])
+    setBoqItems(allBoq ?? [])
 
     if (!items?.length) { setDetailItems([]); setDetailLoading(false); return }
 
@@ -434,6 +479,7 @@ export default function InvoicesPage() {
                   <th style={{ ...th(), textAlign: 'right' }}>Accum. Qty</th>
                   <th style={{ ...th(), textAlign: 'right' }}>BOQ Qty</th>
                   <th style={{ ...th(), textAlign: 'right' }}>Total</th>
+                  <th style={{ ...th(), textAlign: 'center' }}>Coverage</th>
                   <th style={th()}>Status</th>
                 </tr></thead>
                 <tbody>
@@ -443,6 +489,9 @@ export default function InvoicesPage() {
                     const borderLeft = alert === 'red' ? '3px solid #fca5a5' : alert === 'yellow' ? '3px solid #fde68a' : undefined
                     const hasSubItems = item.sub_items && item.sub_items.length > 0
                     const isExpanded = expandedChapter === item.id
+                    const coverage = hasSubItems ? chapterCoverage(item.sub_items!, item.total_amount, boqItems) : null
+                    const covColor = coverage == null ? '#94a3b8' : coverage >= 90 ? '#15803d' : coverage >= 75 ? '#b45309' : '#dc2626'
+                    const covBg = coverage == null ? '#f1f5f9' : coverage >= 90 ? '#dcfce7' : coverage >= 75 ? '#fef3c7' : '#fee2e2'
                     return (
                       <>
                         <tr
@@ -467,6 +516,13 @@ export default function InvoicesPage() {
                           </td>
                           <td style={td(true, true)}>{item.boq_qty?.toLocaleString('es-ES') ?? '—'}</td>
                           <td style={{ ...td(true), fontWeight: 500 }}>{item.total_amount != null ? item.total_amount.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}</td>
+                          <td style={{ ...td(), textAlign: 'center' }}>
+                            {coverage != null ? (
+                              <span style={{ background: covBg, color: covColor, padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.75rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                {coverage.toFixed(0)}%
+                              </span>
+                            ) : <span style={{ color: '#94a3b8', fontSize: '.75rem' }}>—</span>}
+                          </td>
                           <td style={{ ...td() }}>
                             {alert === 'red' && <span style={{ background: '#fca5a5', color: '#991b1b', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.75rem', fontWeight: 600 }}>NOT IN BOQ</span>}
                             {alert === 'yellow' && (
@@ -479,7 +535,7 @@ export default function InvoicesPage() {
                         </tr>
                         {isExpanded && hasSubItems && (
                           <tr key={`${item.id}-sub`}>
-                            <td colSpan={9} style={{ padding: 0, background: '#f0f7ff', borderBottom: '2px solid #bfdbfe' }}>
+                            <td colSpan={10} style={{ padding: 0, background: '#f0f7ff', borderBottom: '2px solid #bfdbfe' }}>
                               <div style={{ padding: '.75rem 1.5rem 1rem 2.5rem' }}>
                                 <div style={{ fontSize: '.75rem', fontWeight: 600, color: '#2563eb', marginBottom: '.5rem', textTransform: 'uppercase', letterSpacing: '.05em' }}>
                                   Line items — {item.description}
@@ -492,18 +548,35 @@ export default function InvoicesPage() {
                                       <th style={{ padding: '.4rem .75rem', textAlign: 'right', fontWeight: 600, color: '#1e40af', whiteSpace: 'nowrap' }}>Qty</th>
                                       <th style={{ padding: '.4rem .75rem', textAlign: 'right', fontWeight: 600, color: '#1e40af', whiteSpace: 'nowrap' }}>Unit Price</th>
                                       <th style={{ padding: '.4rem .75rem', textAlign: 'right', fontWeight: 600, color: '#1e40af', whiteSpace: 'nowrap' }}>Total</th>
+                                      <th style={{ padding: '.4rem .75rem', textAlign: 'center', fontWeight: 600, color: '#1e40af', whiteSpace: 'nowrap' }}>BOQ Match</th>
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {item.sub_items!.map((sub, idx) => (
-                                      <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#f0f7ff' }}>
-                                        <td style={{ padding: '.4rem .75rem', color: '#1e293b' }}>{sub.description}</td>
-                                        <td style={{ padding: '.4rem .75rem', color: '#64748b', whiteSpace: 'nowrap' }}>{sub.unit ?? '—'}</td>
-                                        <td style={{ padding: '.4rem .75rem', textAlign: 'right', color: '#64748b' }}>{sub.quantity?.toLocaleString('es-ES') ?? '—'}</td>
-                                        <td style={{ padding: '.4rem .75rem', textAlign: 'right', color: '#64748b' }}>{sub.unit_price != null ? sub.unit_price.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}</td>
-                                        <td style={{ padding: '.4rem .75rem', textAlign: 'right', fontWeight: 500, color: '#1e293b' }}>{sub.total_amount != null ? sub.total_amount.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}</td>
-                                      </tr>
-                                    ))}
+                                    {item.sub_items!.map((sub, idx) => {
+                                      const { score, tier } = matchSubItem(sub, boqItems)
+                                      const badgeStyle = tier === 'strong'
+                                        ? { background: '#dcfce7', color: '#15803d' }
+                                        : tier === 'partial'
+                                          ? { background: '#fef3c7', color: '#92400e' }
+                                          : tier === 'weak'
+                                            ? { background: '#f1f5f9', color: '#64748b' }
+                                            : { background: '#fee2e2', color: '#dc2626' }
+                                      const tierLabel = tier === 'strong' ? `Strong ${score}%` : tier === 'partial' ? `Partial ${score}%` : tier === 'weak' ? `Weak ${score}%` : 'No Match'
+                                      return (
+                                        <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#f0f7ff' }}>
+                                          <td style={{ padding: '.4rem .75rem', color: '#1e293b' }}>{sub.description}</td>
+                                          <td style={{ padding: '.4rem .75rem', color: '#64748b', whiteSpace: 'nowrap' }}>{sub.unit ?? '—'}</td>
+                                          <td style={{ padding: '.4rem .75rem', textAlign: 'right', color: '#64748b' }}>{sub.quantity?.toLocaleString('es-ES') ?? '—'}</td>
+                                          <td style={{ padding: '.4rem .75rem', textAlign: 'right', color: '#64748b' }}>{sub.unit_price != null ? sub.unit_price.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}</td>
+                                          <td style={{ padding: '.4rem .75rem', textAlign: 'right', fontWeight: 500, color: '#1e293b' }}>{sub.total_amount != null ? sub.total_amount.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}</td>
+                                          <td style={{ padding: '.4rem .75rem', textAlign: 'center' }}>
+                                            {boqItems.length > 0 ? (
+                                              <span style={{ ...badgeStyle, padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.72rem', fontWeight: 600, whiteSpace: 'nowrap' }}>{tierLabel}</span>
+                                            ) : <span style={{ color: '#94a3b8', fontSize: '.72rem' }}>No BOQ</span>}
+                                          </td>
+                                        </tr>
+                                      )
+                                    })}
                                   </tbody>
                                 </table>
                               </div>

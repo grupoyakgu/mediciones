@@ -68,6 +68,22 @@ function normalizeText(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim()
 }
 
+function jaccardTokens(s: string): Set<string> {
+  return new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean))
+}
+function jaccardScore(a: string, b: string): number {
+  const ta = jaccardTokens(a), tb = jaccardTokens(b)
+  if (ta.size === 0 && tb.size === 0) return 0
+  let inter = 0; ta.forEach(t => { if (tb.has(t)) inter++ })
+  const union = ta.size + tb.size - inter
+  return union === 0 ? 0 : Math.round((inter / union) * 100)
+}
+function bestSubItemScore(desc: string, boqItems: BoqRow[]): number {
+  let best = 0
+  for (const b of boqItems) best = Math.max(best, jaccardScore(desc, b.description ?? ''))
+  return best
+}
+
 function findBoqMatch(
   desc: string,
   boqItems: BoqRow[]
@@ -307,6 +323,44 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
           description: `Budget exceeded: ${row.description} — ${details}`,
         })
         emailAlerts.push({ description: row.description, details })
+      }
+    }
+
+    // Sub-item matching: no-match → high priority; chapter coverage < 75% → high priority
+    for (const row of itemRows) {
+      const subs: SubItem[] = Array.isArray(row.sub_items) ? row.sub_items as SubItem[] : []
+      if (!subs.length) continue
+
+      let matchedAmt = 0
+      for (const sub of subs) {
+        const score = bestSubItemScore(sub.description, boqItems ?? [])
+        if (score < 51) {
+          alertRows.push({
+            project_id: projectId,
+            invoice_id: invoice.id,
+            type: 'sub_item_not_in_boq',
+            priority: 'high',
+            description: `Sub-item not found in BOQ: ${sub.description}`,
+          })
+          emailAlerts.push({ description: sub.description, details: 'Sub-item not found in BOQ (Jaccard match < 51%)' })
+        } else {
+          matchedAmt += sub.total_amount ?? 0
+        }
+      }
+
+      const chapterTotal = row.total_amount ?? 0
+      if (chapterTotal > 0) {
+        const coverage = (matchedAmt / chapterTotal) * 100
+        if (coverage < 75) {
+          alertRows.push({
+            project_id: projectId,
+            invoice_id: invoice.id,
+            type: 'chapter_coverage_low',
+            priority: 'high',
+            description: `Chapter coverage ${coverage.toFixed(0)}% < 75%: ${row.description}`,
+          })
+          emailAlerts.push({ description: row.description, details: `Chapter BOQ coverage ${coverage.toFixed(0)}% is below 75%` })
+        }
       }
     }
 

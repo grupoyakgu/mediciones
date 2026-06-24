@@ -34,8 +34,28 @@ export default async function OverviewPage({ params }: { params: { projectId: st
 
   const invoiceIds = (invoices ?? []).map(i => i.id)
   const { data: invoiceItems } = invoiceIds.length
-    ? await supabase.from('invoice_items').select('total_amount, match_status, boq_item_id').in('invoice_id', invoiceIds)
+    ? await supabase.from('invoice_items').select('total_amount, match_status, boq_item_id, sub_items').in('invoice_id', invoiceIds)
     : { data: [] }
+
+  // Jaccard matching for sub-items (unmatched total KPI)
+  function jaccardTokensOv(s: string): Set<string> {
+    return new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean))
+  }
+  function jaccardScoreOv(a: string, b: string): number {
+    const ta = jaccardTokensOv(a), tb = jaccardTokensOv(b)
+    let inter = 0; ta.forEach(t => { if (tb.has(t)) inter++ })
+    const union = ta.size + tb.size - inter
+    return union === 0 ? 0 : inter / union
+  }
+  const boqDescs = (boqItems ?? []).map(b => b.description ?? '')
+  let unmatchedSubItemTotal = 0
+  for (const item of invoiceItems ?? []) {
+    const subs = Array.isArray((item as { sub_items?: unknown }).sub_items) ? (item as { sub_items: { description: string; total_amount: number | null }[] }).sub_items : []
+    for (const sub of subs) {
+      const best = boqDescs.reduce((m, d) => Math.max(m, jaccardScoreOv(sub.description, d)), 0)
+      if (best < 0.51) unmatchedSubItemTotal += sub.total_amount ?? 0
+    }
+  }
 
   const totalBudget = (boqItems ?? []).reduce((s, r) => s + (r.total_amount ?? 0), 0)
   const totalInvoiced = (invoices ?? []).reduce((s, r) => s + (r.total_amount ?? 0), 0)
@@ -94,6 +114,15 @@ export default async function OverviewPage({ params }: { params: { projectId: st
           <KpiCard label="Alerts" value={String(alertCount)} warn={alertCount > 0} clickable />
         </Link>
       </div>
+      {unmatchedSubItemTotal > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-xl px-5 py-4 flex items-center gap-4">
+          <span className="text-red-500 text-2xl">⚠️</span>
+          <div>
+            <p className="text-sm font-semibold text-red-800">Unmatched Sub-items (approved invoices)</p>
+            <p className="text-xs text-red-600 mt-0.5">{fmt(unmatchedSubItemTotal)} from sub-items with no BOQ match — verify these line items against the BOQ.</p>
+          </div>
+        </div>
+      )}
 
       <OverviewCharts chapterData={chapterData} cumData={cumData} currency={currency} />
 
