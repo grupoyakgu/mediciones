@@ -284,22 +284,14 @@ export default function BoqTable({ projectId }: { projectId: string }) {
                             <td className="px-4 py-2 text-gray-500 font-mono">
                               <div className="flex items-center gap-1.5">
                                 {item.item_code ?? '—'}
-                                {item.item_code && dupCodes.has(item.item_code) && (() => {
-                                  const allChapters = dupCodes.get(item.item_code)!
-                                  const others = allChapters.filter((_, i) => i !== allChapters.indexOf(
-                                    item.chapter_id
-                                      ? `${item.chapter_id}${item.chapter_name ? ' – ' + item.chapter_name : ''}`
-                                      : (item.chapter_name ?? '?')
-                                  ))
-                                  return (
-                                    <span
-                                      className="px-1 py-0.5 text-xs font-bold bg-red-600 text-white rounded leading-none cursor-help whitespace-nowrap"
-                                      title={`Also in: ${others.join(', ')}`}
-                                    >
-                                      DUP · also in {others.join(', ')}
-                                    </span>
-                                  )
-                                })()}
+                                {item.item_code && dupCodes.has(item.item_code) && (
+                                  <span
+                                    className="px-1 py-0.5 text-xs font-bold bg-red-600 text-white rounded leading-none cursor-help whitespace-nowrap"
+                                    title={`Duplicate of: ${item.item_code} — also in: ${dupCodes.get(item.item_code)!.filter(ch => ch !== (item.chapter_id ? `${item.chapter_id}${item.chapter_name ? ' – ' + item.chapter_name : ''}` : (item.chapter_name ?? '?'))).join(', ')}`}
+                                  >
+                                    DUP {item.item_code}
+                                  </span>
+                                )}
                               </div>
                             </td>
                             <td className="px-4 py-2 text-gray-800 max-w-xs">
