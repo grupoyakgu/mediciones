@@ -2,12 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { chat, clearHistory, setActiveProject, getActiveProject, listAllProjects, findProjectByName } from '@/lib/agent';
 import { TelegramClient } from '@/lib/telegram';
 
+export const maxDuration = 60;
+
 export async function POST(req: NextRequest) {
+  let chatId: number | undefined;
   const telegram = new TelegramClient();
+
   try {
     const body = await req.json();
     const message = body?.message;
-    const chatId: number | undefined = message?.chat?.id;
+    chatId = message?.chat?.id;
     const text: string | undefined = message?.text?.trim();
 
     if (!chatId || !text) return NextResponse.json({ ok: true });
@@ -56,8 +60,19 @@ export async function POST(req: NextRequest) {
 
     const reply = await chat(chatId, text);
     await telegram.sendMessage(chatId, reply);
-  } catch (err) {
+  } catch (err: unknown) {
     console.error('[telegram] error:', err);
+    if (chatId) {
+      try {
+        const msg = err instanceof Error ? err.message : String(err);
+        const userMsg = msg.includes('credit balance is too low')
+          ? '⚠️ The AI service is temporarily unavailable (billing issue). Please try again later.'
+          : msg.includes('timed out')
+          ? '⏱ Request timed out. Try asking a simpler question or select a smaller project.'
+          : '❌ Something went wrong. Please try again.';
+        await telegram.sendMessage(chatId, userMsg);
+      } catch { /* ignore secondary error */ }
+    }
   }
 
   return NextResponse.json({ ok: true });
