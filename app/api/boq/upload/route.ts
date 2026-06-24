@@ -23,8 +23,8 @@ function toNum(v: unknown): number | null {
 
 function detectAnomaly(code: string, lastChapterCode: string): boolean {
   if (!code) return true
-  const prefix = code.split('.')[0]
-  return !prefix || prefix !== lastChapterCode
+  if (!lastChapterCode) return false
+  return !code.startsWith(lastChapterCode)
 }
 
 function parseXlsx(buffer: ArrayBuffer): BoqRow[] {
