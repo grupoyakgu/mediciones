@@ -21,10 +21,13 @@ function toNum(v: unknown): number | null {
   return isNaN(n) ? null : n
 }
 
+function isTopLevelChapter(code: string): boolean {
+  return /^\d+$/.test(code)
+}
+
 function detectAnomaly(code: string, lastChapterCode: string): boolean {
-  if (!code) return true
-  if (!lastChapterCode) return false
-  return !code.startsWith(lastChapterCode)
+  if (!code || !lastChapterCode) return true
+  return false
 }
 
 function parseXlsx(buffer: ArrayBuffer): BoqRow[] {
@@ -47,7 +50,7 @@ function parseXlsx(buffer: ArrayBuffer): BoqRow[] {
 
     if (nat === 'Capítulo' || nat === 'Capitulo') {
       chapterNames.set(code, desc)
-      lastChapterCode = code
+      if (isTopLevelChapter(code)) lastChapterCode = code
     } else if (nat === 'Partida') {
       const anomaly = detectAnomaly(code, lastChapterCode)
       items.push({
@@ -84,7 +87,7 @@ function parseCsv(text: string): BoqRow[] {
 
     if (nat === 'Capítulo' || nat === 'Capitulo') {
       chapterNames.set(code, desc)
-      lastChapterCode = code
+      if (isTopLevelChapter(code)) lastChapterCode = code
     } else if (nat === 'Partida') {
       const anomaly = detectAnomaly(code, lastChapterCode)
       items.push({
