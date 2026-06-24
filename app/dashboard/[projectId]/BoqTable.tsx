@@ -113,7 +113,7 @@ export default function BoqTable({ projectId }: { projectId: string }) {
       .map(([id, chItems]) => ({
         id,
         name: chapterMeta.get(id) ?? id,
-        items: chItems,
+        items: chItems.slice().sort((a, b) => (a.item_code ?? '').localeCompare(b.item_code ?? '', undefined, { numeric: true })),
         subtotal: chItems.reduce((s, i) => s + effectiveTotal(i), 0),
       }))
   }, [items, search, minPrice, maxPrice, sortField, sortDir, chapterMeta])
