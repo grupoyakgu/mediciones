@@ -1,10 +1,11 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 
 export default function SettingsPage() {
   const { projectId } = useParams<{ projectId: string }>()
+  const router = useRouter()
 
   const [boqFile, setBoqFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -86,6 +87,10 @@ export default function SettingsPage() {
     setSaving(false)
     setSaveMsg(data.error ? `❌ ${data.error}` : '✅ Settings saved')
     setTimeout(() => setSaveMsg(''), 3000)
+    if (!data.error) {
+      window.dispatchEvent(new Event('projectsChanged'))
+      router.refresh()
+    }
   }
 
   if (loading) {

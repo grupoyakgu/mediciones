@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 
 interface Props {
   projectId: string
@@ -13,6 +14,7 @@ export default function ProjectHeader({ projectId, initialName }: Props) {
   const [draft, setDraft] = useState(initialName)
   const [saving, setSaving] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const router = useRouter()
 
   function startEdit() {
     setDraft(name)
@@ -32,6 +34,8 @@ export default function ProjectHeader({ projectId, initialName }: Props) {
     setName(trimmed)
     setEditing(false)
     setSaving(false)
+    window.dispatchEvent(new Event('projectsChanged'))
+    router.refresh()
   }
 
   function cancel() {
