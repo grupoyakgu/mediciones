@@ -49,6 +49,22 @@ export async function DELETE(req: NextRequest) {
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
   const supabase = makeSupabase()
+
+  // Delete invoice_items referencing boq_items of this project before cascade
+  const { data: boqIds } = await supabase
+    .from('boq_items')
+    .select('id')
+    .eq('project_id', id)
+
+  if (boqIds && boqIds.length > 0) {
+    const ids = boqIds.map((r: { id: string }) => r.id)
+    const { error: iiErr } = await supabase
+      .from('invoice_item')
+      .delete()
+      .in('boq_item_id', ids)
+    if (iiErr) return NextResponse.json({ error: iiErr.message }, { status: 500 })
+  }
+
   const { error } = await supabase.from('projects').delete().eq('id', id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ success: true })
