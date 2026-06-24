@@ -93,17 +93,6 @@ export default function SettingsPage() {
         <div className="space-y-5">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Retention (garantía): <span className="text-blue-600 font-bold">{retentionPct}%</span>
-            </label>
-            <input
-              type="range" min={0} max={20} step={0.5} value={retentionPct}
-              onChange={e => setRetentionPct(Number(e.target.value))}
-              className="w-full"
-            />
-            <p className="text-xs text-gray-400 mt-1">Deducted from each certificación total to get the net payable amount</p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
               Alert threshold: <span className="text-blue-600 font-bold">{threshold}%</span>
             </label>
             <input
@@ -122,6 +111,34 @@ export default function SettingsPage() {
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <p className="text-xs text-gray-400 mt-1">Comma-separated email addresses</p>
+          </div>
+        </div>
+        <div className="mt-6 flex items-center gap-4">
+          <button
+            onClick={saveSettings}
+            disabled={saving}
+            className="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50 hover:bg-blue-700"
+          >
+            {saving ? 'Saving…' : 'Save Settings'}
+          </button>
+          {saveMsg && <span className="text-sm">{saveMsg}</span>}
+        </div>
+      </div>
+
+      {/* General settings */}
+      <div className="bg-white border border-gray-200 rounded-xl p-6">
+        <h2 className="text-base font-semibold text-gray-900 mb-4">General Settings</h2>
+        <div className="space-y-5">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Retention (garantía): <span className="text-blue-600 font-bold">{retentionPct}%</span>
+            </label>
+            <input
+              type="range" min={0} max={20} step={0.5} value={retentionPct}
+              onChange={e => setRetentionPct(Number(e.target.value))}
+              className="w-full"
+            />
+            <p className="text-xs text-gray-400 mt-1">Deducted from each certificación total to calculate the net payable amount</p>
           </div>
         </div>
         <div className="mt-6 flex items-center gap-4">

@@ -4,12 +4,21 @@ import { cookies } from 'next/headers'
 import { isSupportedFile, parseFile } from '@/lib/file-parser'
 import { claudeCreate } from '@/lib/claude'
 
+interface SubItem {
+  description: string
+  unit?: string
+  quantity?: number
+  unit_price?: number
+  total_amount?: number
+}
+
 interface InvoiceItem {
   description: string
   unit?: string
   quantity?: number
   unit_price?: number
   total_amount?: number
+  sub_items?: SubItem[]
 }
 
 interface InvoiceData {
@@ -106,7 +115,15 @@ This may be a Spanish construction "Certificación" (payment certificate). In th
 - total_ejecucion_material = the "TOTAL EJECUCIÓN MATERIAL" amount (sum of all chapter totals before any deductions)
 - a_deducir = the "A deducir certificación anterior" amount (previous certification deduction, positive number)
 - total_certificacion = the "TOTAL CERTIFICACIÓN" amount after applying retention/guarantee deduction
-- items = one entry per CAPÍTULO (chapter), with description = full chapter name/title, total_amount = that chapter's total amount for this certification period
+- items = one entry per CAPÍTULO (chapter). Each chapter item must include:
+  - description = full chapter name/title (e.g. "CAPÍTULO 1 - MOVIMIENTO DE TIERRAS")
+  - total_amount = that chapter's total amount for this certification period
+  - sub_items = array of every individual line item (partida) inside this chapter, each with:
+    - description = line item description
+    - unit = unit of measure (m², ml, ud, etc.) or null
+    - quantity = quantity for this certification or null
+    - unit_price = unit price or null
+    - total_amount = line total or null
 
 Return format:
 {
@@ -120,16 +137,25 @@ Return format:
   "total_certificacion": number or null,
   "items": [
     {
-      "description": "string (full chapter name, e.g. CAPÍTULO 1 - MOVIMIENTO DE TIERRAS)",
+      "description": "string (full chapter name)",
       "unit": null,
       "quantity": null,
       "unit_price": null,
-      "total_amount": number or null
+      "total_amount": number or null,
+      "sub_items": [
+        {
+          "description": "string",
+          "unit": "string or null",
+          "quantity": number or null,
+          "unit_price": number or null,
+          "total_amount": number or null
+        }
+      ]
     }
   ]
 }
 
-Spanish terms: CAPÍTULO=chapter, TOTAL EJECUCIÓN MATERIAL=total_ejecucion_material, A deducir certificación anterior=a_deducir, TOTAL CERTIFICACIÓN=total_certificacion, Retención/Garantía=retention deduction.
+Spanish terms: CAPÍTULO=chapter, partida=line item, TOTAL EJECUCIÓN MATERIAL=total_ejecucion_material, A deducir certificación anterior=a_deducir, TOTAL CERTIFICACIÓN=total_certificacion, Retención/Garantía=retention deduction.
 Return ONLY the raw JSON object starting with {, no code blocks, no explanation.`
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -210,6 +236,7 @@ Return ONLY the raw JSON object starting with {, no code blocks, no explanation.
         total_amount: item.total_amount ?? null,
         match_status: match ? 'ok' : 'not_in_boq',
         match_notes:  match ? match.notes : 'No BOQ match found',
+        sub_items:    item.sub_items ?? null,
       }
     })
 

@@ -18,6 +18,14 @@ interface Invoice {
   total_certificacion: number | null
 }
 
+interface SubItem {
+  description: string
+  unit: string | null
+  quantity: number | null
+  unit_price: number | null
+  total_amount: number | null
+}
+
 interface InvoiceItem {
   id: string
   invoice_id: string
@@ -29,6 +37,7 @@ interface InvoiceItem {
   total_amount: number | null
   match_status: string
   match_notes: string | null
+  sub_items: SubItem[] | null
   boq_qty?: number | null
   boq_unit_price?: number | null
   accumulated_qty?: number
@@ -62,6 +71,7 @@ export default function InvoicesPage() {
   const [confirmDelete, setConfirmDelete] = useState<Invoice | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [retentionPct, setRetentionPct] = useState(10)
+  const [expandedChapter, setExpandedChapter] = useState<string | null>(null)
 
   useEffect(() => {
     loadInvoices()
@@ -417,30 +427,76 @@ export default function InvoicesPage() {
                     const alert = itemAlert(item)
                     const bg = alert === 'red' ? '#fff1f2' : alert === 'yellow' ? '#fefce8' : 'white'
                     const borderLeft = alert === 'red' ? '3px solid #fca5a5' : alert === 'yellow' ? '3px solid #fde68a' : undefined
+                    const hasSubItems = item.sub_items && item.sub_items.length > 0
+                    const isExpanded = expandedChapter === item.id
                     return (
-                      <tr key={item.id} style={{ background: bg, borderLeft }}>
-                        <td style={{ ...td(), fontWeight: alert ? 500 : 400 }}>{item.description}</td>
-                        <td style={td(false, true)}>{item.unit ?? '—'}</td>
-                        <td style={td(true, true)}>{item.quantity?.toLocaleString('es-ES') ?? '—'}</td>
-                        <td style={{ ...td(true), color: alert === 'yellow' && item.boq_unit_price != null && (item.unit_price ?? 0) > item.boq_unit_price ? '#b45309' : '#1e293b' }}>
-                          {item.unit_price != null ? item.unit_price.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}
-                        </td>
-                        <td style={td(true, true)}>{item.boq_unit_price != null ? item.boq_unit_price.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}</td>
-                        <td style={{ ...td(true), color: item.boq_qty != null && (item.accumulated_qty ?? 0) > item.boq_qty ? '#b45309' : '#1e293b' }}>
-                          {item.accumulated_qty != null ? item.accumulated_qty.toLocaleString('es-ES') : '—'}
-                        </td>
-                        <td style={td(true, true)}>{item.boq_qty?.toLocaleString('es-ES') ?? '—'}</td>
-                        <td style={{ ...td(true), fontWeight: 500 }}>{item.total_amount != null ? item.total_amount.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}</td>
-                        <td style={{ ...td() }}>
-                          {alert === 'red' && <span style={{ background: '#fca5a5', color: '#991b1b', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.75rem', fontWeight: 600 }}>NOT IN BOQ</span>}
-                          {alert === 'yellow' && (
-                            <span style={{ background: '#fde68a', color: '#92400e', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.75rem', fontWeight: 600 }}>
-                              {item.boq_unit_price != null && (item.unit_price ?? 0) > item.boq_unit_price ? 'PRICE ▲' : 'QTY OVERRUN'}
-                            </span>
-                          )}
-                          {!alert && <span style={{ color: '#94a3b8', fontSize: '.75rem' }}>✓ OK</span>}
-                        </td>
-                      </tr>
+                      <>
+                        <tr
+                          key={item.id}
+                          onClick={() => hasSubItems && setExpandedChapter(isExpanded ? null : item.id)}
+                          style={{ background: isExpanded ? '#eff6ff' : bg, borderLeft, cursor: hasSubItems ? 'pointer' : 'default' }}
+                          onMouseEnter={e => { if (hasSubItems && !isExpanded) e.currentTarget.style.background = '#f8fafc' }}
+                          onMouseLeave={e => { e.currentTarget.style.background = isExpanded ? '#eff6ff' : bg }}
+                        >
+                          <td style={{ ...td(), fontWeight: 600 }}>
+                            {hasSubItems && <span style={{ marginRight: '.4rem', fontSize: '.75rem', color: '#2563eb' }}>{isExpanded ? '▼' : '▶'}</span>}
+                            {item.description}
+                          </td>
+                          <td style={td(false, true)}>{item.unit ?? '—'}</td>
+                          <td style={td(true, true)}>{item.quantity?.toLocaleString('es-ES') ?? '—'}</td>
+                          <td style={{ ...td(true), color: alert === 'yellow' && item.boq_unit_price != null && (item.unit_price ?? 0) > item.boq_unit_price ? '#b45309' : '#1e293b' }}>
+                            {item.unit_price != null ? item.unit_price.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}
+                          </td>
+                          <td style={td(true, true)}>{item.boq_unit_price != null ? item.boq_unit_price.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}</td>
+                          <td style={{ ...td(true), color: item.boq_qty != null && (item.accumulated_qty ?? 0) > item.boq_qty ? '#b45309' : '#1e293b' }}>
+                            {item.accumulated_qty != null ? item.accumulated_qty.toLocaleString('es-ES') : '—'}
+                          </td>
+                          <td style={td(true, true)}>{item.boq_qty?.toLocaleString('es-ES') ?? '—'}</td>
+                          <td style={{ ...td(true), fontWeight: 500 }}>{item.total_amount != null ? item.total_amount.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}</td>
+                          <td style={{ ...td() }}>
+                            {alert === 'red' && <span style={{ background: '#fca5a5', color: '#991b1b', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.75rem', fontWeight: 600 }}>NOT IN BOQ</span>}
+                            {alert === 'yellow' && (
+                              <span style={{ background: '#fde68a', color: '#92400e', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.75rem', fontWeight: 600 }}>
+                                {item.boq_unit_price != null && (item.unit_price ?? 0) > item.boq_unit_price ? 'PRICE ▲' : 'QTY OVERRUN'}
+                              </span>
+                            )}
+                            {!alert && <span style={{ color: '#94a3b8', fontSize: '.75rem' }}>✓ OK</span>}
+                          </td>
+                        </tr>
+                        {isExpanded && hasSubItems && (
+                          <tr key={`${item.id}-sub`}>
+                            <td colSpan={9} style={{ padding: 0, background: '#f0f7ff', borderBottom: '2px solid #bfdbfe' }}>
+                              <div style={{ padding: '.75rem 1.5rem 1rem 2.5rem' }}>
+                                <div style={{ fontSize: '.75rem', fontWeight: 600, color: '#2563eb', marginBottom: '.5rem', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                                  Line items — {item.description}
+                                </div>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.82rem' }}>
+                                  <thead>
+                                    <tr style={{ background: '#dbeafe' }}>
+                                      <th style={{ padding: '.4rem .75rem', textAlign: 'left', fontWeight: 600, color: '#1e40af' }}>Description</th>
+                                      <th style={{ padding: '.4rem .75rem', textAlign: 'left', fontWeight: 600, color: '#1e40af', whiteSpace: 'nowrap' }}>Unit</th>
+                                      <th style={{ padding: '.4rem .75rem', textAlign: 'right', fontWeight: 600, color: '#1e40af', whiteSpace: 'nowrap' }}>Qty</th>
+                                      <th style={{ padding: '.4rem .75rem', textAlign: 'right', fontWeight: 600, color: '#1e40af', whiteSpace: 'nowrap' }}>Unit Price</th>
+                                      <th style={{ padding: '.4rem .75rem', textAlign: 'right', fontWeight: 600, color: '#1e40af', whiteSpace: 'nowrap' }}>Total</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {item.sub_items!.map((sub, idx) => (
+                                      <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#f0f7ff' }}>
+                                        <td style={{ padding: '.4rem .75rem', color: '#1e293b' }}>{sub.description}</td>
+                                        <td style={{ padding: '.4rem .75rem', color: '#64748b', whiteSpace: 'nowrap' }}>{sub.unit ?? '—'}</td>
+                                        <td style={{ padding: '.4rem .75rem', textAlign: 'right', color: '#64748b' }}>{sub.quantity?.toLocaleString('es-ES') ?? '—'}</td>
+                                        <td style={{ padding: '.4rem .75rem', textAlign: 'right', color: '#64748b' }}>{sub.unit_price != null ? sub.unit_price.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}</td>
+                                        <td style={{ padding: '.4rem .75rem', textAlign: 'right', fontWeight: 500, color: '#1e293b' }}>{sub.total_amount != null ? sub.total_amount.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </>
                     )
                   })}
                 </tbody>
