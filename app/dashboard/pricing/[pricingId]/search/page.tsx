@@ -202,13 +202,18 @@ export default function SearchPage() {
 
   // BOQ file match
   const [projects, setProjects] = useState<ProjectOption[]>([])
-  const [boqSourceType, setBoqSourceType] = useState<'file' | 'project'>('file')
+  // unpriced side
+  const [unpricedFile, setUnpricedFile] = useState<File | null>(null)
+  const [unpricedItems, setUnpricedItems] = useState<RawItem[]>([])
+  // reference side
+  const [refSourceType, setRefSourceType] = useState<'project' | 'file'>('project')
   const [selectedProjectId, setSelectedProjectId] = useState('')
-  const [boqFile, setBoqFile] = useState<File | null>(null)
-  const [boqItems, setBoqItems] = useState<RawItem[]>([])
+  const [refFile, setRefFile] = useState<File | null>(null)
+  // results
   const [boqResults, setBoqResults] = useState<BoqResult[]>([])
   const [running, setRunning] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const unpricedInputRef = useRef<HTMLInputElement>(null)
+  const refFileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     fetch(`/api/pricing-projects/${pricingId}`)
@@ -235,31 +240,39 @@ export default function SearchPage() {
     setSingleResults(scored)
   }
 
-  // BOQ file upload
-  async function handleBoqFile(file: File) {
-    setBoqFile(file)
-    setBoqItems([])
+  async function handleUnpricedFile(file: File) {
+    setUnpricedFile(file)
+    setUnpricedItems([])
     setBoqResults([])
     const buf = await file.arrayBuffer()
-    setBoqItems(parseBoqBuffer(buf))
+    setUnpricedItems(parseBoqBuffer(buf))
   }
 
-  // Run full BOQ match
+  async function handleRefFile(file: File) {
+    setRefFile(file)
+    setBoqResults([])
+  }
+
   async function runBoqMatch() {
     setRunning(true)
     setBoqResults([])
-    let sourceItems = boqItems
 
-    if (boqSourceType === 'project' && selectedProjectId) {
+    // Build reference item list
+    let referenceItems: RawItem[] = []
+    if (refSourceType === 'project' && selectedProjectId) {
       const res = await fetch(`/api/projects/${selectedProjectId}/boq`)
       const data = await res.json()
-      sourceItems = (data.items ?? []) as RawItem[]
+      referenceItems = (data.items ?? []) as RawItem[]
+    } else if (refSourceType === 'file' && refFile) {
+      const buf = await refFile.arrayBuffer()
+      referenceItems = parseBoqBuffer(buf)
     }
 
-    if (!sourceItems.length || !refItems.length) { setRunning(false); return }
-    const idf = buildIdf(refItems)
-    const results: BoqResult[] = sourceItems.map(item => {
-      const best = findBestMatch(item, refItems, idf)
+    if (!unpricedItems.length || !referenceItems.length) { setRunning(false); return }
+
+    const idf = buildIdf(referenceItems)
+    const results: BoqResult[] = unpricedItems.map(item => {
+      const best = findBestMatch(item, referenceItems, idf)
       return { unpriced: item, best: best?.item ?? null, score: best?.score ?? 0 }
     })
     setBoqResults(results)
@@ -350,60 +363,74 @@ export default function SearchPage() {
       {/* ── Full BOQ Match ── */}
       {mode === 'boq' && (
         <div>
-          <p className="text-sm text-gray-500 mb-4">
-            Upload an unpriced BOQ or select a project, and see the best match from the saved reference for every line item.
-          </p>
-
-          {/* Source selector */}
-          <div className="grid grid-cols-2 gap-3 mb-4 max-w-lg">
-            {(['file', 'project'] as const).map(t => (
-              <button key={t} onClick={() => { setBoqSourceType(t); setBoqFile(null); setBoqItems([]); setBoqResults([]) }}
-                className={`p-3 rounded-lg border-2 text-left transition-colors ${boqSourceType === t ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
-                <p className="text-sm font-semibold text-gray-800">
-                  {t === 'file' ? '📄 Upload BOQ file' : '📁 Existing project'}
-                </p>
-              </button>
-            ))}
-          </div>
-
-          {boqSourceType === 'file' && (
-            <div className="mb-4">
-              <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden"
-                onChange={e => { const f = e.target.files?.[0]; if (f) handleBoqFile(f); e.target.value = '' }} />
-              {boqFile ? (
-                <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-lg px-4 py-3 max-w-lg">
+          <div className="grid grid-cols-2 gap-6 mb-6 max-w-3xl">
+            {/* Left: unpriced BOQ upload */}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Step 1 — Unpriced BOQ</p>
+              <input ref={unpricedInputRef} type="file" accept=".xlsx,.xls" className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleUnpricedFile(f); e.target.value = '' }} />
+              {unpricedFile ? (
+                <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-lg px-4 py-3">
                   <span className="text-green-600">✓</span>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-green-800 truncate">{boqFile.name}</p>
-                    <p className="text-xs text-green-600">{boqItems.length} items parsed</p>
+                    <p className="text-sm font-medium text-green-800 truncate">{unpricedFile.name}</p>
+                    <p className="text-xs text-green-600">{unpricedItems.length} items parsed</p>
                   </div>
-                  <button onClick={() => { setBoqFile(null); setBoqItems([]); setBoqResults([]) }}
+                  <button onClick={() => { setUnpricedFile(null); setUnpricedItems([]); setBoqResults([]) }}
                     className="text-green-400 hover:text-green-700 text-sm">✕</button>
                 </div>
               ) : (
-                <button onClick={() => fileInputRef.current?.click()}
-                  className="max-w-lg w-full border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 hover:bg-blue-50 transition-colors">
-                  <p className="text-gray-500 text-sm">Click to select unpriced BOQ (.xlsx / .xls)</p>
+                <button onClick={() => unpricedInputRef.current?.click()}
+                  className="w-full border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 hover:bg-blue-50 transition-colors">
+                  <p className="text-gray-500 text-sm">Click to upload unpriced BOQ</p>
+                  <p className="text-gray-400 text-xs mt-1">.xlsx / .xls</p>
                 </button>
               )}
             </div>
-          )}
 
-          {boqSourceType === 'project' && (
-            <div className="mb-4 max-w-lg">
-              <select value={selectedProjectId} onChange={e => { setSelectedProjectId(e.target.value); setBoqResults([]) }}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">— Choose a project —</option>
-                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
+            {/* Right: reference source */}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Step 2 — Reference (priced BOQ)</p>
+              <div className="flex gap-2 mb-3">
+                {(['project', 'file'] as const).map(t => (
+                  <button key={t} onClick={() => { setRefSourceType(t); setRefFile(null); setSelectedProjectId(''); setBoqResults([]) }}
+                    className={`flex-1 py-1.5 text-xs rounded-md border transition-colors ${refSourceType === t ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                    {t === 'project' ? '📁 Project' : '📄 Upload file'}
+                  </button>
+                ))}
+              </div>
+              {refSourceType === 'project' ? (
+                <select value={selectedProjectId} onChange={e => { setSelectedProjectId(e.target.value); setBoqResults([]) }}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">— Choose a project —</option>
+                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              ) : (
+                <>
+                  <input ref={refFileInputRef} type="file" accept=".xlsx,.xls" className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleRefFile(f); e.target.value = '' }} />
+                  {refFile ? (
+                    <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2.5">
+                      <span className="text-green-600 text-sm">✓</span>
+                      <span className="text-sm font-medium text-green-800 truncate flex-1">{refFile.name}</span>
+                      <button onClick={() => { setRefFile(null); setBoqResults([]) }} className="text-green-400 hover:text-green-700 text-sm">✕</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => refFileInputRef.current?.click()}
+                      className="w-full border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-blue-400 hover:bg-blue-50 transition-colors">
+                      <p className="text-gray-500 text-sm">Click to upload priced BOQ</p>
+                    </button>
+                  )}
+                </>
+              )}
             </div>
-          )}
+          </div>
 
           <button
             onClick={runBoqMatch}
-            disabled={running || (boqSourceType === 'file' ? boqItems.length === 0 : !selectedProjectId)}
-            className="px-4 py-2 bg-gray-900 text-white text-sm rounded-lg hover:bg-gray-700 disabled:opacity-40 transition-colors mb-6">
-            {running ? 'Matching…' : 'Run Match →'}
+            disabled={running || unpricedItems.length === 0 || (refSourceType === 'project' ? !selectedProjectId : !refFile)}
+            className="px-5 py-2 bg-gray-900 text-white text-sm rounded-lg hover:bg-gray-700 disabled:opacity-40 transition-colors mb-6">
+            {running ? 'Matching…' : `Run Match → (${unpricedItems.length} items)`}
           </button>
 
           {boqResults.length > 0 && (
