@@ -492,7 +492,7 @@ export default function SearchPage() {
                             <button
                               onClick={() => setExpandedRows(prev => {
                                 const next = new Set(prev)
-                                expanded ? next.delete(idx) : next.add(idx)
+                                if (expanded) { next.delete(idx) } else { next.add(idx) }
                                 return next
                               })}
                               title="Show top 5 candidates"
