@@ -483,6 +483,19 @@ export default function PricingPage() {
     setStep('source')
   }
 
+  // Used by "← Change Source" from results — goes back to upload so the user
+  // can replace the unpriced BOQ file if needed, then re-select the source.
+  // Also pre-loads projects so the dropdown isn't empty when they get there.
+  async function goToUploadStep() {
+    if (!projectsLoaded) {
+      const res = await fetch('/api/projects')
+      const data = await res.json()
+      setProjects(data.projects ?? [])
+      setProjectsLoaded(true)
+    }
+    setStep('upload')
+  }
+
   async function runMatching() {
     setStep('matching')
     let refItems: RawItem[] = []
@@ -726,7 +739,7 @@ export default function PricingPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => setStep('source')}
+          <button onClick={goToUploadStep}
             className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
             ← Change Source
           </button>

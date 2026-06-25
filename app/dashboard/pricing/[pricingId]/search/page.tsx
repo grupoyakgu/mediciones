@@ -2,15 +2,58 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'next/navigation'
+import * as XLSX from 'xlsx'
 
 interface RawItem {
   item_code: string
   description: string
   unit?: string
   unit_price?: number | null
+  quantity?: number | null
+  chapter_id?: string
+  chapter_name?: string
 }
 
-// ─── Matching Logic (mirror of page.tsx) ─────────────────────────────────────
+// ─── BOQ Parser (mirrors page.tsx) ───────────────────────────────────────────
+
+function toNum(v: unknown): number | null {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  return isNaN(n) ? null : n
+}
+
+function parseBoqBuffer(buffer: ArrayBuffer): RawItem[] {
+  const wb = XLSX.read(buffer, { type: 'array' })
+  const sheet = wb.Sheets[wb.SheetNames[0]]
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true })
+  const chapterNames = new Map<string, string>()
+  const items: RawItem[] = []
+  for (const row of rows) {
+    if (!Array.isArray(row)) continue
+    const code = String(row[0] ?? '').trim()
+    const nat  = String(row[1] ?? '').trim()
+    const unit = String(row[2] ?? '').trim()
+    const desc = String(row[3] ?? '').trim()
+    if (!code || !nat) continue
+    if (nat === 'Capítulo' || nat === 'Capitulo') {
+      chapterNames.set(code, desc)
+    } else if (nat === 'Partida') {
+      const topChapter = code.split('.')[0]
+      items.push({
+        item_code: code,
+        chapter_id: topChapter,
+        chapter_name: chapterNames.get(topChapter) ?? '',
+        description: desc,
+        unit,
+        quantity: toNum(row[4]),
+        unit_price: toNum(row[5]),
+      })
+    }
+  }
+  return items
+}
+
+// ─── Matching Logic (mirrors page.tsx) ───────────────────────────────────────
 
 const STOP_WORDS = new Set([
   'de','del','de la','la','el','los','las','en','y','a','para','con','por','se',
@@ -104,37 +147,65 @@ function isStructuredCode(code: string): boolean {
   return code.includes('.')
 }
 
-function scoreQuery(query: { item_code: string; description: string }, ref: RawItem, idf: Map<string, number>): number {
-  const normCodeA = normalize(query.item_code), normCodeB = normalize(ref.item_code)
-  if (normCodeA && normCodeA === normCodeB && isStructuredCode(query.item_code) && isStructuredCode(ref.item_code)) return 100
-  const normDescA = normalize(query.description), normDescB = normalize(ref.description)
+function scoreItems(a: { item_code: string; description: string }, b: RawItem, idf: Map<string, number>): number {
+  const normCodeA = normalize(a.item_code), normCodeB = normalize(b.item_code)
+  if (normCodeA && normCodeA === normCodeB && isStructuredCode(a.item_code) && isStructuredCode(b.item_code)) return 100
+  const normDescA = normalize(a.description), normDescB = normalize(b.description)
   if (normDescA && normDescA === normDescB) return 99
-  const tokA = tokens(query.description), tokB = tokens(ref.description)
+  const tokA = tokens(a.description), tokB = tokens(b.description)
   if (!tokA.length && !tokB.length) return 0
   const f1Score = idfWeightedF1(tokA, tokB, idf)
   const lcs = lcsLength(tokA, tokB)
   const lcsScore = tokA.length && tokB.length ? lcs / Math.max(tokA.length, tokB.length) : 0
   const descScore = f1Score * 0.65 + lcsScore * 0.35
-  const codeTokA = tokens(query.item_code), codeTokB = tokens(ref.item_code)
+  const codeTokA = tokens(a.item_code), codeTokB = tokens(b.item_code)
   const codeScore = codeTokA.length && codeTokB.length ? idfWeightedF1(codeTokA, codeTokB, idf) : 0
   return Math.round((descScore * 0.92 + codeScore * 0.08) * 100)
 }
 
+function findBestMatch(query: { item_code: string; description: string }, refItems: RawItem[], idf: Map<string, number>): { item: RawItem; score: number } | null {
+  if (!refItems.length) return null
+  let best: { item: RawItem; score: number } | null = null
+  for (const ref of refItems) {
+    const s = scoreItems(query, ref, idf)
+    if (!best || s > best.score) best = { item: ref, score: s }
+  }
+  return best
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
-interface Result {
-  item: RawItem
+type Mode = 'single' | 'boq'
+
+interface SingleResult { item: RawItem; score: number }
+interface BoqResult {
+  unpriced: RawItem
+  best: RawItem | null
   score: number
 }
+
+interface ProjectOption { id: string; name: string }
 
 export default function SearchPage() {
   const { pricingId } = useParams<{ pricingId: string }>()
   const [refItems, setRefItems] = useState<RawItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [mode, setMode] = useState<Mode>('single')
+
+  // Single search
   const [queryDesc, setQueryDesc] = useState('')
   const [queryCode, setQueryCode] = useState('')
-  const [results, setResults] = useState<Result[]>([])
-  const inputRef = useRef<HTMLInputElement>(null)
+  const [singleResults, setSingleResults] = useState<SingleResult[]>([])
+
+  // BOQ file match
+  const [projects, setProjects] = useState<ProjectOption[]>([])
+  const [boqSourceType, setBoqSourceType] = useState<'file' | 'project'>('file')
+  const [selectedProjectId, setSelectedProjectId] = useState('')
+  const [boqFile, setBoqFile] = useState<File | null>(null)
+  const [boqItems, setBoqItems] = useState<RawItem[]>([])
+  const [boqResults, setBoqResults] = useState<BoqResult[]>([])
+  const [running, setRunning] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     fetch(`/api/pricing-projects/${pricingId}`)
@@ -144,114 +215,236 @@ export default function SearchPage() {
         setLoading(false)
       })
       .catch(() => setLoading(false))
+    fetch('/api/projects')
+      .then(r => r.json())
+      .then(d => setProjects(d.projects ?? []))
+      .catch(() => {})
   }, [pricingId])
 
-  function runSearch() {
-    if (!queryDesc.trim() || !refItems.length) { setResults([]); return }
+  // Single item search
+  function runSingleSearch() {
+    if (!queryDesc.trim() || !refItems.length) { setSingleResults([]); return }
     const idf = buildIdf(refItems)
-    const queryItem = { item_code: queryCode.trim(), description: queryDesc.trim() }
+    const q = { item_code: queryCode.trim(), description: queryDesc.trim() }
     const scored = refItems
-      .map(item => ({ item, score: scoreQuery(queryItem, item, idf) }))
+      .map(item => ({ item, score: scoreItems(q, item, idf) }))
       .sort((a, b) => b.score - a.score)
-    setResults(scored)
+    setSingleResults(scored)
   }
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') runSearch()
+  // BOQ file upload
+  async function handleBoqFile(file: File) {
+    setBoqFile(file)
+    setBoqItems([])
+    setBoqResults([])
+    const buf = await file.arrayBuffer()
+    setBoqItems(parseBoqBuffer(buf))
   }
 
-  const maxScore = results[0]?.score ?? 0
+  // Run full BOQ match
+  async function runBoqMatch() {
+    setRunning(true)
+    setBoqResults([])
+    let sourceItems = boqItems
+
+    if (boqSourceType === 'project' && selectedProjectId) {
+      const res = await fetch(`/api/projects/${selectedProjectId}/boq`)
+      const data = await res.json()
+      sourceItems = (data.items ?? []) as RawItem[]
+    }
+
+    if (!sourceItems.length || !refItems.length) { setRunning(false); return }
+    const idf = buildIdf(refItems)
+    const results: BoqResult[] = sourceItems.map(item => {
+      const best = findBestMatch(item, refItems, idf)
+      return { unpriced: item, best: best?.item ?? null, score: best?.score ?? 0 }
+    })
+    setBoqResults(results)
+    setRunning(false)
+  }
+
+  const maxSingle = singleResults[0]?.score ?? 0
+
+  if (loading) return <p className="text-sm text-gray-400">Loading reference items…</p>
+
+  if (refItems.length === 0) return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+      No reference items saved yet. Run a pricing match first — the reference BOQ will be saved automatically.
+    </div>
+  )
 
   return (
-    <div className="max-w-3xl">
-      <p className="text-sm text-gray-500 mb-4">
-        Type an item description to see how it scores against all reference items. The best match is highlighted in green.
-      </p>
+    <div className="max-w-5xl space-y-6">
+      {/* Mode tabs */}
+      <div className="flex gap-1 border-b border-gray-200">
+        {(['single', 'boq'] as Mode[]).map(m => (
+          <button key={m} onClick={() => setMode(m)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+              mode === m ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}>
+            {m === 'single' ? 'Single Item Search' : 'Full BOQ Match'}
+          </button>
+        ))}
+      </div>
 
-      {loading ? (
-        <p className="text-sm text-gray-400">Loading reference items…</p>
-      ) : refItems.length === 0 ? (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          No reference items saved yet. Run a pricing match first — the reference BOQ will be saved automatically.
-        </div>
-      ) : (
-        <>
+      {/* ── Single Item Search ── */}
+      {mode === 'single' && (
+        <div>
+          <p className="text-sm text-gray-500 mb-4">
+            Type a description to see how it scores against all {refItems.length} reference items. Best match highlighted in green.
+          </p>
           <div className="flex gap-2 mb-6">
-            <input
-              type="text"
-              value={queryCode}
-              onChange={e => setQueryCode(e.target.value)}
-              onKeyDown={handleKeyDown}
+            <input type="text" value={queryCode} onChange={e => setQueryCode(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') runSingleSearch() }}
               placeholder="Item code (optional)"
-              className="w-40 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-            />
-            <input
-              ref={inputRef}
-              autoFocus
-              type="text"
-              value={queryDesc}
-              onChange={e => setQueryDesc(e.target.value)}
-              onKeyDown={handleKeyDown}
+              className="w-40 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-900" />
+            <input autoFocus type="text" value={queryDesc} onChange={e => setQueryDesc(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') runSingleSearch() }}
               placeholder="Description, e.g. A01 Pintura interior"
-              className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-            />
-            <button
-              onClick={runSearch}
-              disabled={!queryDesc.trim()}
-              className="px-4 py-2 bg-gray-900 text-white text-sm rounded-lg hover:bg-gray-700 disabled:opacity-40 transition-colors"
-            >
+              className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900" />
+            <button onClick={runSingleSearch} disabled={!queryDesc.trim()}
+              className="px-4 py-2 bg-gray-900 text-white text-sm rounded-lg hover:bg-gray-700 disabled:opacity-40 transition-colors">
               Search
             </button>
           </div>
 
-          {results.length > 0 && (
-            <div>
-              <p className="text-xs text-gray-400 mb-2">{results.length} reference items scored — showing all</p>
-              <div className="border border-gray-200 rounded-lg overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-gray-50 border-b border-gray-200">
-                      <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 w-24">Score</th>
-                      <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 w-32">Code</th>
-                      <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500">Description</th>
-                      <th className="text-right px-4 py-2.5 text-xs font-medium text-gray-500 w-24">Unit price</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {results.map(({ item, score }, idx) => {
-                      const isTop = score === maxScore && score > 0
-                      return (
-                        <tr
-                          key={idx}
-                          className={isTop ? 'bg-green-50' : score === 0 ? 'opacity-40' : ''}
-                        >
-                          <td className="px-4 py-2.5">
-                            <span className={`inline-flex items-center justify-center w-10 h-6 rounded text-xs font-semibold ${
-                              isTop
-                                ? 'bg-green-600 text-white'
-                                : score >= 51
-                                  ? 'bg-gray-200 text-gray-700'
-                                  : 'text-gray-400'
-                            }`}>
-                              {score}
-                            </span>
-                          </td>
-                          <td className="px-4 py-2.5 font-mono text-xs text-gray-500">{item.item_code}</td>
-                          <td className={`px-4 py-2.5 ${isTop ? 'font-medium text-green-800' : 'text-gray-700'}`}>
-                            {item.description}
-                          </td>
-                          <td className="px-4 py-2.5 text-right text-gray-500">
-                            {item.unit_price != null ? item.unit_price.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+          {singleResults.length > 0 && (
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-200">
+                    <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 w-20">Score</th>
+                    <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 w-32">Code</th>
+                    <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500">Description</th>
+                    <th className="text-right px-4 py-2.5 text-xs font-medium text-gray-500 w-28">Unit price</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {singleResults.map(({ item, score }, idx) => {
+                    const isTop = score === maxSingle && score > 0
+                    return (
+                      <tr key={idx} className={isTop ? 'bg-green-50' : score === 0 ? 'opacity-40' : ''}>
+                        <td className="px-4 py-2.5">
+                          <span className={`inline-flex items-center justify-center w-10 h-6 rounded text-xs font-semibold ${
+                            isTop ? 'bg-green-600 text-white' : score >= 51 ? 'bg-gray-200 text-gray-700' : 'text-gray-400'
+                          }`}>{score}</span>
+                        </td>
+                        <td className="px-4 py-2.5 font-mono text-xs text-gray-500">{item.item_code}</td>
+                        <td className={`px-4 py-2.5 ${isTop ? 'font-medium text-green-800' : 'text-gray-700'}`}>{item.description}</td>
+                        <td className="px-4 py-2.5 text-right text-gray-500">
+                          {item.unit_price != null ? item.unit_price.toLocaleString('es-ES', { minimumFractionDigits: 2 }) : '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
-        </>
+        </div>
+      )}
+
+      {/* ── Full BOQ Match ── */}
+      {mode === 'boq' && (
+        <div>
+          <p className="text-sm text-gray-500 mb-4">
+            Upload an unpriced BOQ or select a project, and see the best match from the saved reference for every line item.
+          </p>
+
+          {/* Source selector */}
+          <div className="grid grid-cols-2 gap-3 mb-4 max-w-lg">
+            {(['file', 'project'] as const).map(t => (
+              <button key={t} onClick={() => { setBoqSourceType(t); setBoqFile(null); setBoqItems([]); setBoqResults([]) }}
+                className={`p-3 rounded-lg border-2 text-left transition-colors ${boqSourceType === t ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                <p className="text-sm font-semibold text-gray-800">
+                  {t === 'file' ? '📄 Upload BOQ file' : '📁 Existing project'}
+                </p>
+              </button>
+            ))}
+          </div>
+
+          {boqSourceType === 'file' && (
+            <div className="mb-4">
+              <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleBoqFile(f); e.target.value = '' }} />
+              {boqFile ? (
+                <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-lg px-4 py-3 max-w-lg">
+                  <span className="text-green-600">✓</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-green-800 truncate">{boqFile.name}</p>
+                    <p className="text-xs text-green-600">{boqItems.length} items parsed</p>
+                  </div>
+                  <button onClick={() => { setBoqFile(null); setBoqItems([]); setBoqResults([]) }}
+                    className="text-green-400 hover:text-green-700 text-sm">✕</button>
+                </div>
+              ) : (
+                <button onClick={() => fileInputRef.current?.click()}
+                  className="max-w-lg w-full border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 hover:bg-blue-50 transition-colors">
+                  <p className="text-gray-500 text-sm">Click to select unpriced BOQ (.xlsx / .xls)</p>
+                </button>
+              )}
+            </div>
+          )}
+
+          {boqSourceType === 'project' && (
+            <div className="mb-4 max-w-lg">
+              <select value={selectedProjectId} onChange={e => { setSelectedProjectId(e.target.value); setBoqResults([]) }}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">— Choose a project —</option>
+                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+          )}
+
+          <button
+            onClick={runBoqMatch}
+            disabled={running || (boqSourceType === 'file' ? boqItems.length === 0 : !selectedProjectId)}
+            className="px-4 py-2 bg-gray-900 text-white text-sm rounded-lg hover:bg-gray-700 disabled:opacity-40 transition-colors mb-6">
+            {running ? 'Matching…' : 'Run Match →'}
+          </button>
+
+          {boqResults.length > 0 && (
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-200">
+                    <th className="text-left px-3 py-2.5 text-xs font-medium text-gray-500 w-28">Code</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-medium text-gray-500">Unpriced item</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-medium text-gray-500 w-16">Score</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-medium text-gray-500">Best match</th>
+                    <th className="text-right px-3 py-2.5 text-xs font-medium text-gray-500 w-28">Unit price</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {boqResults.map(({ unpriced, best, score }, idx) => (
+                    <tr key={idx} className={score >= 81 ? 'bg-green-50' : score === 0 ? 'opacity-40' : ''}>
+                      <td className="px-3 py-2.5 font-mono text-xs text-gray-400">{unpriced.item_code}</td>
+                      <td className="px-3 py-2.5 text-gray-800">{unpriced.description}</td>
+                      <td className="px-3 py-2.5">
+                        <span className={`inline-flex items-center justify-center w-10 h-6 rounded text-xs font-semibold ${
+                          score >= 81 ? 'bg-green-600 text-white' : score >= 51 ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-500'
+                        }`}>{score}</span>
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-600">
+                        {best ? (
+                          <span>
+                            <span className="font-mono text-xs text-gray-400 mr-2">{best.item_code}</span>
+                            {best.description}
+                          </span>
+                        ) : '—'}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-gray-700 font-medium">
+                        {best?.unit_price != null
+                          ? best.unit_price.toLocaleString('es-ES', { minimumFractionDigits: 2 })
+                          : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
     </div>
   )
