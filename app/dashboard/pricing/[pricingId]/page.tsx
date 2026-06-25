@@ -89,29 +89,105 @@ function parseBoqBuffer(buffer: ArrayBuffer): RawItem[] {
 
 // ─── Matching Logic ───────────────────────────────────────────────────────────
 
+const STOP_WORDS = new Set([
+  'de','del','la','el','los','las','en','y','a','para','con','por','se','un','una',
+  'o','al','e','su','sus','que','es','son','si','lo','le','les','no','i','ii','iii',
+])
+
 function normalize(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
+  return s
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '') // strip accents: á→a, é→e …
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
-function tokenSet(s: string): Set<string> {
-  return new Set(normalize(s).split(' ').filter(Boolean))
+function tokens(s: string): string[] {
+  return normalize(s).split(' ').filter(t => t.length > 1 && !STOP_WORDS.has(t))
 }
 
-function jaccardSimilarity(a: string, b: string): number {
-  const ta = tokenSet(a)
-  const tb = tokenSet(b)
-  if (ta.size === 0 && tb.size === 0) return 0
+function lcsLength(a: string[], b: string[]): number {
+  if (a.length === 0 || b.length === 0) return 0
+  // Use two-row DP to save memory
+  let prev = new Array(b.length + 1).fill(0)
+  for (let i = 0; i < a.length; i++) {
+    const curr = new Array(b.length + 1).fill(0)
+    for (let j = 0; j < b.length; j++)
+      curr[j + 1] = a[i] === b[j] ? prev[j] + 1 : Math.max(prev[j + 1], curr[j])
+    prev = curr
+  }
+  return prev[b.length]
+}
+
+function bigramJaccard(tokA: string[], tokB: string[]): number {
+  if (tokA.length < 2 || tokB.length < 2) return 0
+  const setA = new Set<string>()
+  const setB = new Set<string>()
+  for (let i = 0; i < tokA.length - 1; i++) setA.add(`${tokA[i]} ${tokA[i + 1]}`)
+  for (let i = 0; i < tokB.length - 1; i++) setB.add(`${tokB[i]} ${tokB[i + 1]}`)
   let inter = 0
-  ta.forEach(t => { if (tb.has(t)) inter++ })
-  const union = ta.size + tb.size - inter
+  setA.forEach(bg => { if (setB.has(bg)) inter++ })
+  const union = setA.size + setB.size - inter
+  return union === 0 ? 0 : inter / union
+}
+
+function unigramJaccard(tokA: string[], tokB: string[]): number {
+  if (tokA.length === 0 || tokB.length === 0) return 0
+  const setA = new Set(tokA)
+  const setB = new Set(tokB)
+  let inter = 0
+  setA.forEach(t => { if (setB.has(t)) inter++ })
+  const union = setA.size + setB.size - inter
   return union === 0 ? 0 : inter / union
 }
 
 function scoreItems(a: RawItem, b: RawItem): number {
-  if (normalize(a.item_code) === normalize(b.item_code)) return 100
-  const raw = jaccardSimilarity(a.description, b.description) * 0.8
-           + jaccardSimilarity(a.item_code, b.item_code) * 0.2
-  return Math.round(raw * 100)
+  const normCodeA = normalize(a.item_code)
+  const normCodeB = normalize(b.item_code)
+
+  // Exact code match → perfect score
+  if (normCodeA && normCodeA === normCodeB) return 100
+
+  const normDescA = normalize(a.description)
+  const normDescB = normalize(b.description)
+
+  // Exact description match
+  if (normDescA && normDescA === normDescB) return 98
+
+  const tokA = tokens(a.description)
+  const tokB = tokens(b.description)
+
+  if (tokA.length === 0 || tokB.length === 0) {
+    // Fall back to code similarity only
+    const codeTokA = tokens(a.item_code)
+    const codeTokB = tokens(b.item_code)
+    return Math.round(unigramJaccard(codeTokA, codeTokB) * 40)
+  }
+
+  // LCS ratio: how much of the longer description appears in-order in the other
+  const lcs = lcsLength(tokA, tokB)
+  const lcsScore = lcs / Math.max(tokA.length, tokB.length)
+
+  // Bigram (adjacent word pairs preserve local phrase order)
+  const bgScore = bigramJaccard(tokA, tokB)
+
+  // Unigram Jaccard (word overlap ignoring order — catches synonym-heavy descriptions)
+  const jScore = unigramJaccard(tokA, tokB)
+
+  // Coverage: what fraction of the shorter description is covered by LCS
+  // (a short description fully contained inside a long one should score well)
+  const coverageScore = lcs / Math.min(tokA.length, tokB.length)
+
+  // Combine: order-sensitive signals weighted higher, with coverage bonus
+  const descScore = lcsScore * 0.40 + bgScore * 0.25 + jScore * 0.20 + coverageScore * 0.15
+
+  // Code similarity as small tiebreaker
+  const codeTokA = tokens(a.item_code)
+  const codeTokB = tokens(b.item_code)
+  const codeScore = unigramJaccard(codeTokA, codeTokB)
+
+  return Math.round((descScore * 0.9 + codeScore * 0.1) * 100)
 }
 
 function matchLabel(score: number): MatchLabel {
