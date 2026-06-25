@@ -413,10 +413,24 @@ export default function PricingPage() {
       .then(r => r.json())
       .then(d => {
         if (d.project?.results && Array.isArray(d.project.results) && d.project.results.length > 0) {
-          setChapters(d.project.results as Chapter[])
-          setExpandedChapters(new Set((d.project.results as Chapter[]).map((c: Chapter) => c.id)))
+          const savedChapters = d.project.results as Chapter[]
+          setChapters(savedChapters)
+          setExpandedChapters(new Set(savedChapters.map((c: Chapter) => c.id)))
+          // Restore unpricedItems so "Change Source → Re-run" works correctly
+          const restored: RawItem[] = savedChapters.flatMap(ch =>
+            ch.items.map(i => ({
+              item_code: i.item_code,
+              chapter_id: i.chapter_id,
+              chapter_name: i.chapter_name,
+              description: i.description,
+              unit: i.unit,
+              quantity: i.quantity,
+              unit_price: i.unit_price,
+              total_amount: i.total_amount,
+            }))
+          )
+          setUnpricedItems(restored)
           if (d.project.unpriced_file_name) {
-            // Create a minimal fake file reference for the header display
             setUnpricedFile(new File([], d.project.unpriced_file_name))
           }
           setStep('results')

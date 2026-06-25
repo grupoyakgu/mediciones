@@ -131,7 +131,8 @@ export default function SearchPage() {
   const { pricingId } = useParams<{ pricingId: string }>()
   const [refItems, setRefItems] = useState<RawItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [query, setQuery] = useState('')
+  const [queryDesc, setQueryDesc] = useState('')
+  const [queryCode, setQueryCode] = useState('')
   const [results, setResults] = useState<Result[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -145,10 +146,10 @@ export default function SearchPage() {
       .catch(() => setLoading(false))
   }, [pricingId])
 
-  function runSearch(q: string) {
-    if (!q.trim() || !refItems.length) { setResults([]); return }
+  function runSearch() {
+    if (!queryDesc.trim() || !refItems.length) { setResults([]); return }
     const idf = buildIdf(refItems)
-    const queryItem = { item_code: '', description: q.trim() }
+    const queryItem = { item_code: queryCode.trim(), description: queryDesc.trim() }
     const scored = refItems
       .map(item => ({ item, score: scoreQuery(queryItem, item, idf) }))
       .sort((a, b) => b.score - a.score)
@@ -156,7 +157,7 @@ export default function SearchPage() {
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') runSearch(query)
+    if (e.key === 'Enter') runSearch()
   }
 
   const maxScore = results[0]?.score ?? 0
@@ -177,18 +178,26 @@ export default function SearchPage() {
         <>
           <div className="flex gap-2 mb-6">
             <input
+              type="text"
+              value={queryCode}
+              onChange={e => setQueryCode(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Item code (optional)"
+              className="w-40 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+            />
+            <input
               ref={inputRef}
               autoFocus
               type="text"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
+              value={queryDesc}
+              onChange={e => setQueryDesc(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="e.g. A01 Pintura interior"
+              placeholder="Description, e.g. A01 Pintura interior"
               className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
             />
             <button
-              onClick={() => runSearch(query)}
-              disabled={!query.trim()}
+              onClick={runSearch}
+              disabled={!queryDesc.trim()}
               className="px-4 py-2 bg-gray-900 text-white text-sm rounded-lg hover:bg-gray-700 disabled:opacity-40 transition-colors"
             >
               Search
