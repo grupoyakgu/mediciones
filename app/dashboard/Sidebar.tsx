@@ -197,46 +197,44 @@ export default function Sidebar({ userEmail }: { userEmail: string }) {
 
         {/* Pricing Projects section */}
         <div className="mt-6">
-          <div className="flex items-center justify-between px-3 mb-2">
+          <div className="flex items-center justify-between">
             <Link
               href="/dashboard/pricing"
-              className="text-[10px] text-white/25 uppercase tracking-widest hover:text-white/50 transition-colors"
+              className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
+                pathname === '/dashboard/pricing'
+                  ? 'bg-white/10 text-white font-medium'
+                  : 'text-white/50 hover:text-white hover:bg-white/5'
+              }`}
             >
+              <span className="text-base leading-none">$</span>
               Pricing Projects
             </Link>
             <button
               onClick={handleNewPricingProject}
               disabled={creatingPricing}
               title="New pricing project"
-              className="text-white/30 hover:text-white/70 transition-colors text-sm leading-none disabled:opacity-40"
+              className="text-white/30 hover:text-white/70 transition-colors text-sm leading-none disabled:opacity-40 pr-3"
             >
               +
             </button>
           </div>
-          {pricingProjects.length === 0 ? (
-            <button
-              onClick={handleNewPricingProject}
-              disabled={creatingPricing}
-              className="flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors text-white/30 hover:text-white hover:bg-white/5 w-full text-left disabled:opacity-40"
-            >
-              <span className="text-base leading-none">$</span>
-              {creatingPricing ? 'Creating…' : 'New pricing project'}
-            </button>
-          ) : (
-            pricingProjects.map(p => (
-              <Link
-                key={p.id}
-                href={`/dashboard/pricing/${p.id}`}
-                className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
-                  pathname.startsWith(`/dashboard/pricing/${p.id}`)
-                    ? 'bg-white/10 text-white font-medium'
-                    : 'text-white/50 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <span className="text-base leading-none text-white/60">$</span>
-                <span className="truncate">{p.name}</span>
-              </Link>
-            ))
+          {pricingProjects.length === 0 ? null : (
+            <div className="mt-0.5">
+              {pricingProjects.map(p => (
+                <Link
+                  key={p.id}
+                  href={`/dashboard/pricing/${p.id}`}
+                  className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
+                    pathname.startsWith(`/dashboard/pricing/${p.id}`)
+                      ? 'bg-white/10 text-white font-medium'
+                      : 'text-white/50 hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-white/30 flex-shrink-0" />
+                  <span className="truncate">{p.name}</span>
+                </Link>
+              ))}
+            </div>
           )}
         </div>
       </nav>
