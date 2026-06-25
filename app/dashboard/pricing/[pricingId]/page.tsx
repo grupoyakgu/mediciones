@@ -82,6 +82,7 @@ export default function PricingPage() {
   const [chapters, setChapters] = useState<Chapter[]>([])
   const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set())
   const [excludes, setExcludes] = useState<ExcludeEntry[]>([])
+  const [includeAutoPriced, setIncludeAutoPriced] = useState(true)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
@@ -124,6 +125,9 @@ export default function PricingPage() {
       .then(r => r.json())
       .then(d => setExcludes(d.excludes ?? []))
       .catch(() => { /* non-critical */ })
+
+    const stored = localStorage.getItem(`autoPrice:${pricingId}`)
+    if (stored !== null) setIncludeAutoPriced(stored !== 'false')
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pricingId])
 
@@ -149,6 +153,15 @@ export default function PricingPage() {
     }
     window.addEventListener('autoPriceUpdated', onAutoPriceUpdated)
     return () => window.removeEventListener('autoPriceUpdated', onAutoPriceUpdated)
+  }, [])
+
+  // Sync includeAutoPriced from Settings tab toggle
+  useEffect(() => {
+    function onAutoPriceToggled(e: Event) {
+      setIncludeAutoPriced((e as CustomEvent).detail)
+    }
+    window.addEventListener('autoPriceToggled', onAutoPriceToggled)
+    return () => window.removeEventListener('autoPriceToggled', onAutoPriceToggled)
   }, [])
 
   const scrollToChapter = useCallback((chapterId: string) => {
@@ -271,11 +284,13 @@ export default function PricingPage() {
       return next
     })
 
-  // Apply live exclude list to chapters — overrides the stored excluded flag
+  // Apply live exclude list and auto-price toggle to chapters
   const displayChapters = useMemo(() => chapters.map(ch => {
     const items = ch.items.map(item => {
       const excluded = isExcluded(item, excludes)
-      return { ...item, excluded }
+      const suppressAutoPrice = !includeAutoPriced && item.autoPriced
+      const effectiveTotal = (excluded || suppressAutoPrice) ? null : item.effectiveTotal
+      return { ...item, excluded, effectiveTotal }
     })
     const activeItems = items.filter(i => !i.excluded)
     return {
@@ -285,7 +300,7 @@ export default function PricingPage() {
       avgMatchScore: activeItems.length
         ? Math.round(activeItems.reduce((s, i) => s + i.matchScore, 0) / activeItems.length) : 0,
     }
-  }), [chapters, excludes])
+  }), [chapters, excludes, includeAutoPriced])
 
   const totalCost = displayChapters.reduce((s, c) => s + c.subtotal, 0)
   const allItems = displayChapters.flatMap(c => c.items)
