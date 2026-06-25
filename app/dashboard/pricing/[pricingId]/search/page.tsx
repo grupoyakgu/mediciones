@@ -166,14 +166,11 @@ function scoreItems(a: { item_code: string; description: string }, b: RawItem, i
   return Math.round((descScore * 0.92 + codeScore * 0.08) * 100)
 }
 
-function findBestMatch(query: { item_code: string; description: string }, refItems: RawItem[], idf: Map<string, number>): { item: RawItem; score: number } | null {
+function findBestMatch(query: { item_code: string; description: string }, refItems: RawItem[], idf: Map<string, number>): { item: RawItem; score: number; top5: Candidate[] } | null {
   if (!refItems.length) return null
-  let best: { item: RawItem; score: number } | null = null
-  for (const ref of refItems) {
-    const s = scoreItems(query, ref, idf)
-    if (!best || s > best.score) best = { item: ref, score: s }
-  }
-  return best
+  const all: Candidate[] = refItems.map(ref => ({ item: ref, score: scoreItems(query, ref, idf) }))
+  all.sort((a, b) => b.score - a.score)
+  return { item: all[0].item, score: all[0].score, top5: all.slice(0, 5) }
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -181,10 +178,12 @@ function findBestMatch(query: { item_code: string; description: string }, refIte
 type Mode = 'single' | 'boq'
 
 interface SingleResult { item: RawItem; score: number }
+interface Candidate { item: RawItem; score: number }
 interface BoqResult {
   unpriced: RawItem
   best: RawItem | null
   score: number
+  top5: Candidate[]
 }
 
 interface ProjectOption { id: string; name: string }
@@ -212,6 +211,8 @@ export default function SearchPage() {
   // results
   const [boqResults, setBoqResults] = useState<BoqResult[]>([])
   const [running, setRunning] = useState(false)
+  const [debugLog, setDebugLog] = useState<string[]>([])
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
   const unpricedInputRef = useRef<HTMLInputElement>(null)
   const refFileInputRef = useRef<HTMLInputElement>(null)
 
@@ -256,6 +257,8 @@ export default function SearchPage() {
   async function runBoqMatch() {
     setRunning(true)
     setBoqResults([])
+    setDebugLog([])
+    setExpandedRows(new Set())
 
     // Build reference item list
     let referenceItems: RawItem[] = []
@@ -268,14 +271,39 @@ export default function SearchPage() {
       referenceItems = parseBoqBuffer(buf)
     }
 
-    if (!unpricedItems.length || !referenceItems.length) { setRunning(false); return }
+    const log: string[] = []
+    log.push(`[DEBUG] Unpriced items: ${unpricedItems.length}`)
+    log.push(`[DEBUG] Reference items (BOQ Match): ${referenceItems.length}`)
+    log.push(`[DEBUG] Reference items (Single Search / DB ref_items): ${refItems.length}`)
+    log.push(`[DEBUG] Reference source: ${refSourceType === 'project' ? `project id=${selectedProjectId}` : `file=${refFile?.name}`}`)
+
+    if (!unpricedItems.length || !referenceItems.length) {
+      log.push('[DEBUG] ERROR: missing unpriced or reference items — aborting')
+      setDebugLog(log)
+      setRunning(false)
+      return
+    }
 
     const idf = buildIdf(referenceItems)
     const results: BoqResult[] = unpricedItems.map(item => {
-      const best = findBestMatch(item, referenceItems, idf)
-      return { unpriced: item, best: best?.item ?? null, score: best?.score ?? 0 }
+      const match = findBestMatch(item, referenceItems, idf)
+      return {
+        unpriced: item,
+        best: match?.item ?? null,
+        score: match?.score ?? 0,
+        top5: match?.top5 ?? [],
+      }
     })
+
+    // Log top5 for every item so user can copy from console
+    results.forEach(r => {
+      console.log(`[BOQ MATCH] "${r.unpriced.item_code}" / "${r.unpriced.description}"`)
+      console.log(`  winner → "${r.best?.item_code}" / "${r.best?.description}" score=${r.score}`)
+      r.top5.forEach((c, i) => console.log(`  #${i + 1} score=${c.score}  "${c.item.item_code}" "${c.item.description}"`))
+    })
+
     setBoqResults(results)
+    setDebugLog(log)
     setRunning(false)
   }
 
@@ -433,11 +461,20 @@ export default function SearchPage() {
             {running ? 'Matching…' : `Run Match → (${unpricedItems.length} items)`}
           </button>
 
+          {/* Debug summary panel */}
+          {debugLog.length > 0 && (
+            <div className="mb-4 rounded-lg border border-orange-200 bg-orange-50 p-3 font-mono text-xs text-orange-800 whitespace-pre-wrap">
+              {debugLog.join('\n')}
+              {'\n'}[DEBUG] Full per-item scores logged to browser console (F12 → Console)
+            </div>
+          )}
+
           {boqResults.length > 0 && (
             <div className="border border-gray-200 rounded-lg overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-200">
+                    <th className="text-left px-3 py-2.5 text-xs font-medium text-gray-500 w-8"></th>
                     <th className="text-left px-3 py-2.5 text-xs font-medium text-gray-500 w-28">Code</th>
                     <th className="text-left px-3 py-2.5 text-xs font-medium text-gray-500">Unpriced item</th>
                     <th className="text-left px-3 py-2.5 text-xs font-medium text-gray-500 w-16">Score</th>
@@ -446,30 +483,64 @@ export default function SearchPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {boqResults.map(({ unpriced, best, score }, idx) => (
-                    <tr key={idx} className={score >= 81 ? 'bg-green-50' : ''}>
-                      <td className="px-3 py-2.5 font-mono text-xs text-gray-400">{unpriced.item_code}</td>
-                      <td className="px-3 py-2.5 text-gray-800">{unpriced.description}</td>
-                      <td className="px-3 py-2.5">
-                        <span className={`inline-flex items-center justify-center w-10 h-6 rounded text-xs font-semibold ${
-                          score >= 81 ? 'bg-green-600 text-white' : score >= 51 ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-500'
-                        }`}>{score}</span>
-                      </td>
-                      <td className="px-3 py-2.5 text-gray-600">
-                        {best ? (
-                          <span>
-                            <span className="font-mono text-xs text-gray-400 mr-2">{best.item_code}</span>
-                            {best.description}
-                          </span>
-                        ) : '—'}
-                      </td>
-                      <td className="px-3 py-2.5 text-right text-gray-700 font-medium">
-                        {best?.unit_price != null
-                          ? best.unit_price.toLocaleString('es-ES', { minimumFractionDigits: 2 })
-                          : '—'}
-                      </td>
-                    </tr>
-                  ))}
+                  {boqResults.map(({ unpriced, best, score, top5 }, idx) => {
+                    const expanded = expandedRows.has(idx)
+                    return (
+                      <>
+                        <tr key={idx} className={score >= 81 ? 'bg-green-50' : ''}>
+                          <td className="px-3 py-2.5">
+                            <button
+                              onClick={() => setExpandedRows(prev => {
+                                const next = new Set(prev)
+                                expanded ? next.delete(idx) : next.add(idx)
+                                return next
+                              })}
+                              title="Show top 5 candidates"
+                              className="text-gray-400 hover:text-gray-700 text-xs leading-none"
+                            >{expanded ? '▾' : '▸'}</button>
+                          </td>
+                          <td className="px-3 py-2.5 font-mono text-xs text-gray-400">{unpriced.item_code}</td>
+                          <td className="px-3 py-2.5 text-gray-800">{unpriced.description}</td>
+                          <td className="px-3 py-2.5">
+                            <span className={`inline-flex items-center justify-center w-10 h-6 rounded text-xs font-semibold ${
+                              score >= 81 ? 'bg-green-600 text-white' : score >= 51 ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-500'
+                            }`}>{score}</span>
+                          </td>
+                          <td className="px-3 py-2.5 text-gray-600">
+                            {best ? (
+                              <span>
+                                <span className="font-mono text-xs text-gray-400 mr-2">{best.item_code}</span>
+                                {best.description}
+                              </span>
+                            ) : '—'}
+                          </td>
+                          <td className="px-3 py-2.5 text-right text-gray-700 font-medium">
+                            {best?.unit_price != null
+                              ? best.unit_price.toLocaleString('es-ES', { minimumFractionDigits: 2 })
+                              : '—'}
+                          </td>
+                        </tr>
+                        {expanded && (
+                          <tr key={`${idx}-debug`} className="bg-gray-50">
+                            <td colSpan={6} className="px-6 py-3">
+                              <p className="text-xs font-semibold text-gray-500 mb-1">Top 5 candidates for &quot;{unpriced.description}&quot; (code: {unpriced.item_code || '—'})</p>
+                              <table className="w-full text-xs font-mono">
+                                <tbody>
+                                  {top5.map((c, ci) => (
+                                    <tr key={ci} className={ci === 0 ? 'text-green-700 font-semibold' : 'text-gray-500'}>
+                                      <td className="pr-4 w-12">#{ci + 1} [{c.score}]</td>
+                                      <td className="pr-4 w-32">{c.item.item_code}</td>
+                                      <td>{c.item.description}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
