@@ -273,9 +273,22 @@ function matchItems(newItems: RawItem[], refItems: RawItem[], excludes: ExcludeE
     let bestScore = 0
     let bestRef: RawItem | null = null
     if (!excl) {
+      // DEBUG: log top-5 candidates for items whose description contains "pintura"
+      const debugItem = /pintura/i.test(item.description)
+      const allScores: { score: number; ref: RawItem }[] = []
       for (const ref of refItems) {
         const s = scoreItems(item, ref, idf)
+        if (debugItem) allScores.push({ score: s, ref })
         if (s > bestScore) { bestScore = s; bestRef = ref }
+      }
+      if (debugItem) {
+        allScores.sort((a, b) => b.score - a.score)
+        console.log(`[MATCH DEBUG] item: "${item.item_code}" / "${item.description}"`)
+        console.log(`  winner → "${bestRef?.item_code}" / "${bestRef?.description}" score=${bestScore}`)
+        console.log('  top 5 candidates:')
+        allScores.slice(0, 5).forEach(({ score, ref }) =>
+          console.log(`    score=${score}  code="${ref.item_code}"  desc="${ref.description}"`)
+        )
       }
     }
     const matchedPrice = !excl && bestScore > 50 ? (bestRef?.unit_price ?? null) : null
