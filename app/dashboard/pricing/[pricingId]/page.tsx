@@ -724,10 +724,18 @@ export default function PricingPage() {
                                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">EXC</span>
                               ) : (
                                 <div className="flex flex-col items-center gap-0.5">
-                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
-                                    style={{ background: `${labelColor}1a`, color: labelColor }}>
-                                    {item.matchScore}%
-                                  </span>
+                                  {item.autoPriced ? (
+                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                                      includeAutoPriced
+                                        ? 'bg-green-100 text-green-700'
+                                        : 'bg-red-100 text-red-600'
+                                    }`}>AUTO</span>
+                                  ) : (
+                                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                                      style={{ background: `${labelColor}1a`, color: labelColor }}>
+                                      {item.matchScore}%
+                                    </span>
+                                  )}
                                   <span className="text-[9px] text-gray-400">{MATCH_EMOJI[item.matchLabel]}</span>
                                 </div>
                               )}

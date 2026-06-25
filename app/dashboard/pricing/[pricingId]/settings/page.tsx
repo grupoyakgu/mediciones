@@ -67,7 +67,7 @@ export default function PricingSettingsPage() {
               name: ch.name,
               lowCount: ch.items.filter(
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (i: any) => !i.excluded && (i.matchScore ?? 100) < 52 && (!i.manualUnitPrice || i.manualUnitPrice === '')
+                (i: any) => !i.excluded && (i.matchScore ?? 100) <= 50 && (!i.manualUnitPrice || i.manualUnitPrice === '')
               ).length,
             }))
             setChapters(summaries)
@@ -200,7 +200,7 @@ export default function PricingSettingsPage() {
           <h2 className="text-base font-semibold text-gray-900">Auto-Price Low-Confidence Items</h2>
           <p className="text-xs text-gray-500 mt-0.5">
             Uses AI (experienced construction professional, Sevilla 2024–2025 market) to estimate
-            unit prices for items with a match score below 52 that have no price yet.
+            unit prices for items with a match score of 50 or below that have no price yet.
           </p>
         </div>
 
@@ -217,7 +217,7 @@ export default function PricingSettingsPage() {
             <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${includeAutoPriced ? 'translate-x-4' : 'translate-x-0'}`} />
           </div>
           <span className="text-sm text-gray-700 font-medium">
-            Include auto-priced items in <span className="text-gray-900 font-semibold">Total Estimated Project Cost</span>
+            Show Auto-Priced Items in <span className="text-gray-900 font-semibold">Total Estimated Project Cost</span>
           </span>
         </label>
 
