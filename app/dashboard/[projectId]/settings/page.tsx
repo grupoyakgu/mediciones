@@ -65,6 +65,8 @@ export default function SettingsPage() {
     if (data.error) { setBoqMsg(`❌ ${data.error}`); return }
     setBoqMsg(`✅ Uploaded ${data.count} BOQ items`)
     setBoqFileName(boqFile.name)
+    window.dispatchEvent(new Event('boqUpdated'))
+    router.refresh()
   }
 
   async function saveAll() {
