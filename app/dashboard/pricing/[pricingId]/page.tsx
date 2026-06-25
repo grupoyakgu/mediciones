@@ -545,6 +545,14 @@ export default function PricingPage() {
     }))
   }, [])
 
+  const saveManualPricesToDB = useCallback((updatedChapters: Chapter[]) => {
+    fetch(`/api/pricing-projects/${pricingId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ results: updatedChapters }),
+    }).catch(() => { /* non-critical */ })
+  }, [pricingId])
+
   const toggleChapter = (id: string) =>
     setExpandedChapters(prev => {
       const next = new Set(prev)
@@ -560,6 +568,8 @@ export default function PricingPage() {
   const unpricedCount = activeItems.length - pricedCount
   const overallScore = activeItems.length
     ? Math.round(activeItems.reduce((s, i) => s + i.matchScore, 0) / activeItems.length) : 0
+  const perfectMatchCount = activeItems.filter(i => i.matchScore === 100).length
+  const perfectMatchPct = activeItems.length ? Math.round(perfectMatchCount / activeItems.length * 100) : 0
 
   const matchDist = (
     [['High', '#16a34a'], ['Medium', '#ca8a04'], ['Low', '#dc2626']] as [MatchLabel, string][]
@@ -726,7 +736,21 @@ export default function PricingPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button onClick={goToUploadStep}
+          <button
+            onClick={async () => {
+              if (unpricedItems.length > 0) {
+                // Items already loaded — go directly to source selection
+                if (!projectsLoaded) {
+                  const res = await fetch('/api/projects')
+                  const data = await res.json()
+                  setProjects(data.projects ?? [])
+                  setProjectsLoaded(true)
+                }
+                setStep('source')
+              } else {
+                goToUploadStep()
+              }
+            }}
             className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
             ← Change Source
           </button>
@@ -737,7 +761,7 @@ export default function PricingPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <KpiCard label="Total Items" value={allItems.length.toString()} />
         <KpiCard label="Priced Items"
           value={`${pricedCount} (${activeItems.length ? Math.round(pricedCount / activeItems.length * 100) : 0}%)`}
@@ -747,6 +771,8 @@ export default function PricingPage() {
           color={unpricedCount > 0 ? 'red' : 'green'} />
         <KpiCard label="Overall Match Score" value={`${overallScore}%`}
           color={overallScore >= 81 ? 'green' : overallScore >= 51 ? 'yellow' : 'red'} />
+        <KpiCard label="Perfect Matches (100%)" value={`${perfectMatchCount} (${perfectMatchPct}%)`}
+          color={perfectMatchPct >= 50 ? 'green' : perfectMatchPct >= 20 ? 'yellow' : 'default'} />
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 p-5">
@@ -890,6 +916,11 @@ export default function PricingPage() {
                     style={{ background: `${scoreColor}20`, color: scoreColor }}>
                     {ch.avgMatchScore}% match
                   </span>
+                  {(() => { const excCount = ch.items.filter(i => i.excluded).length; return excCount > 0 ? (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-600 tracking-wide">
+                      EXC {excCount}
+                    </span>
+                  ) : null })()}
                   {isFiltering && (
                     <span className="text-xs text-gray-400">({filteredItems.length} shown)</span>
                   )}
@@ -929,7 +960,7 @@ export default function PricingPage() {
                             <td className="px-4 py-2 max-w-xs">
                               <div className="flex items-start gap-1.5">
                                 {item.excluded && (
-                                  <span className="flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 tracking-wide mt-0.5">EXC</span>
+                                  <span className="flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-600 tracking-wide mt-0.5">EXC</span>
                                 )}
                                 <div>
                                   <div className={`truncate ${item.excluded ? 'line-through text-gray-400' : 'text-gray-800'}`} title={item.description}>
@@ -956,6 +987,7 @@ export default function PricingPage() {
                                   placeholder={item.matchedUnitPrice != null ? fmt(item.matchedUnitPrice) : 'Enter price'}
                                   value={item.manualUnitPrice}
                                   onChange={e => updateManualPrice(chIdx, realIdx, e.target.value)}
+                                  onBlur={() => saveManualPricesToDB(chapters)}
                                   className={`w-full text-right border rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 ${
                                     needsPrice
                                       ? 'border-red-300 bg-red-50 placeholder-red-300'
@@ -969,7 +1001,7 @@ export default function PricingPage() {
                             </td>
                             <td className="px-4 py-2 text-center">
                               {item.excluded ? (
-                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-500">EXC</span>
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">EXC</span>
                               ) : (
                                 <div className="flex flex-col items-center gap-0.5">
                                   <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
