@@ -12,6 +12,11 @@ interface Project {
   currency: string
 }
 
+interface PricingProject {
+  id: string
+  name: string
+}
+
 function GrupoYakguLogo() {
   return (
     <svg width="120" height="36" viewBox="0 0 120 36" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -49,16 +54,23 @@ export default function Sidebar({ userEmail }: { userEmail: string }) {
   const pathname = usePathname()
   const router = useRouter()
   const [projects, setProjects] = useState<Project[]>([])
+  const [pricingProjects, setPricingProjects] = useState<PricingProject[]>([])
   const [expanded, setExpanded] = useState(true)
+  const [creatingPricing, setCreatingPricing] = useState(false)
 
   const projectMatch = pathname.match(/^\/dashboard\/([^/]+)/)
   const activeProjectId = projectMatch ? projectMatch[1] : null
   const activeProject = projects.find(p => p.id === activeProjectId)
 
   const loadProjects = useCallback(async () => {
-    const res = await fetch('/api/projects')
-    const data = await res.json()
-    setProjects(data.projects ?? [])
+    const [projRes, pricingRes] = await Promise.all([
+      fetch('/api/projects'),
+      fetch('/api/pricing-projects'),
+    ])
+    const projData = await projRes.json()
+    const pricingData = await pricingRes.json()
+    setProjects(projData.projects ?? [])
+    setPricingProjects(pricingData.projects ?? [])
   }, [])
 
   useEffect(() => {
@@ -66,6 +78,22 @@ export default function Sidebar({ userEmail }: { userEmail: string }) {
     window.addEventListener('projectsChanged', loadProjects)
     return () => window.removeEventListener('projectsChanged', loadProjects)
   }, [loadProjects])
+
+  async function handleNewPricingProject() {
+    setCreatingPricing(true)
+    const name = `Pricing Project ${new Date().toLocaleDateString('es-ES')}`
+    const res = await fetch('/api/pricing-projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    const data = await res.json()
+    setCreatingPricing(false)
+    if (data.project) {
+      window.dispatchEvent(new Event('projectsChanged'))
+      router.push(`/dashboard/pricing/${data.project.id}`)
+    }
+  }
 
   async function handleLogout() {
     const supabase = createClient()
@@ -167,19 +195,49 @@ export default function Sidebar({ userEmail }: { userEmail: string }) {
           </div>
         )}
 
-        {/* Project Pricing — last item */}
-        <div className="mt-4">
-          <Link
-            href="/dashboard/pricing"
-            className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
-              pathname.startsWith('/dashboard/pricing')
-                ? 'bg-white/10 text-white font-medium'
-                : 'text-white/50 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <span className="text-base leading-none text-white">$</span>
-            Project Pricing
-          </Link>
+        {/* Pricing Projects section */}
+        <div className="mt-6">
+          <div className="flex items-center justify-between px-3 mb-2">
+            <Link
+              href="/dashboard/pricing"
+              className="text-[10px] text-white/25 uppercase tracking-widest hover:text-white/50 transition-colors"
+            >
+              Pricing Projects
+            </Link>
+            <button
+              onClick={handleNewPricingProject}
+              disabled={creatingPricing}
+              title="New pricing project"
+              className="text-white/30 hover:text-white/70 transition-colors text-sm leading-none disabled:opacity-40"
+            >
+              +
+            </button>
+          </div>
+          {pricingProjects.length === 0 ? (
+            <button
+              onClick={handleNewPricingProject}
+              disabled={creatingPricing}
+              className="flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors text-white/30 hover:text-white hover:bg-white/5 w-full text-left disabled:opacity-40"
+            >
+              <span className="text-base leading-none">$</span>
+              {creatingPricing ? 'Creating…' : 'New pricing project'}
+            </button>
+          ) : (
+            pricingProjects.map(p => (
+              <Link
+                key={p.id}
+                href={`/dashboard/pricing/${p.id}`}
+                className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
+                  pathname.startsWith(`/dashboard/pricing/${p.id}`)
+                    ? 'bg-white/10 text-white font-medium'
+                    : 'text-white/50 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                <span className="text-base leading-none text-white/60">$</span>
+                <span className="truncate">{p.name}</span>
+              </Link>
+            ))
+          )}
         </div>
       </nav>
 

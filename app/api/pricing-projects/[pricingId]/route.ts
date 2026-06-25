@@ -25,7 +25,7 @@ export async function GET(
   const supabase = makeSupabase()
   const { data, error } = await supabase
     .from('pricing_projects')
-    .select('id, name, created_at, updated_at')
+    .select('id, name, created_at, updated_at, results, unpriced_file_name')
     .eq('id', params.pricingId)
     .single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -37,12 +37,24 @@ export async function PATCH(
   { params }: { params: { pricingId: string } }
 ) {
   const body = await req.json()
-  const { name } = body as { name: string }
-  if (!name) return NextResponse.json({ error: 'name is required' }, { status: 400 })
+  const { name, results, unpriced_file_name } = body as {
+    name?: string
+    results?: unknown
+    unpriced_file_name?: string | null
+  }
+
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
+  if (name !== undefined) {
+    if (!name) return NextResponse.json({ error: 'name cannot be empty' }, { status: 400 })
+    updates.name = name
+  }
+  if (results !== undefined) updates.results = results
+  if (unpriced_file_name !== undefined) updates.unpriced_file_name = unpriced_file_name
+
   const supabase = makeSupabase()
   const { error } = await supabase
     .from('pricing_projects')
-    .update({ name, updated_at: new Date().toISOString() })
+    .update(updates)
     .eq('id', params.pricingId)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ success: true })

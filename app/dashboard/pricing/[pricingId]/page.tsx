@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useParams } from 'next/navigation'
 import * as XLSX from 'xlsx'
 import {
@@ -258,6 +258,25 @@ export default function PricingPage() {
   const refInputRef = useRef<HTMLInputElement>(null)
   const chapterRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
+  // On mount, check if this pricing project already has saved results
+  useEffect(() => {
+    fetch(`/api/pricing-projects/${pricingId}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.project?.results && Array.isArray(d.project.results) && d.project.results.length > 0) {
+          setChapters(d.project.results as Chapter[])
+          setExpandedChapters(new Set((d.project.results as Chapter[]).map((c: Chapter) => c.id)))
+          if (d.project.unpriced_file_name) {
+            // Create a minimal fake file reference for the header display
+            setUnpricedFile(new File([], d.project.unpriced_file_name))
+          }
+          setStep('results')
+        }
+      })
+      .catch(() => { /* ignore, stay on upload step */ })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pricingId])
+
   const scrollToChapter = useCallback((chapterId: string) => {
     const el = chapterRefs.current[chapterId]
     if (!el) return
@@ -334,6 +353,13 @@ export default function PricingPage() {
     setChapters(grouped)
     setExpandedChapters(new Set(grouped.map(c => c.id)))
     setStep('results')
+
+    // Persist results to DB so they reload on next visit
+    fetch(`/api/pricing-projects/${pricingId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ results: grouped, unpriced_file_name: unpricedFile?.name ?? null }),
+    }).catch(() => { /* non-critical */ })
   }
 
   const updateManualPrice = useCallback((chIdx: number, itemIdx: number, val: string) => {

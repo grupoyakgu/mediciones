@@ -21,19 +21,23 @@ export default function PricingProjectLayout({ children }: { children: React.Rea
   }, [pricingId])
 
   async function saveName() {
-    if (!editValue.trim()) return
+    const trimmed = editValue.trim()
+    if (!trimmed) return
     await fetch(`/api/pricing-projects/${pricingId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: editValue.trim() }),
+      body: JSON.stringify({ name: trimmed }),
     })
-    setName(editValue.trim())
+    setName(trimmed)
     setEditing(false)
+    window.dispatchEvent(new Event('projectsChanged'))
+    router.refresh()
   }
 
   async function deleteProject() {
     if (!confirm('Delete this pricing project? This cannot be undone.')) return
     await fetch(`/api/pricing-projects/${pricingId}`, { method: 'DELETE' })
+    window.dispatchEvent(new Event('projectsChanged'))
     router.push('/dashboard/pricing')
   }
 
