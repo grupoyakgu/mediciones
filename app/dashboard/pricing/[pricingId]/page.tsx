@@ -641,6 +641,13 @@ export default function PricingPage() {
                       EXC {excCount}
                     </span>
                   ) : null })()}
+                  {(() => { const autoCount = ch.items.filter(i => i.autoPriced && !i.excluded).length; return autoCount > 0 ? (
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded tracking-wide ${
+                      includeAutoPriced ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'
+                    }`}>
+                      AUTO {autoCount}
+                    </span>
+                  ) : null })()}
                   {isFiltering && (
                     <span className="text-xs text-gray-400">({filteredItems.length} shown)</span>
                   )}
