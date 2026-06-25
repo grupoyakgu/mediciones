@@ -32,6 +32,7 @@ interface MatchedItem extends RawItem {
   manualUnitPrice: string
   effectiveUnitPrice: number | null
   effectiveTotal: number | null
+  excluded: boolean
 }
 
 interface Chapter {
@@ -48,7 +49,7 @@ interface ExcludeEntry { id: string; item_code?: string; description?: string }
 
 type Step = 'upload' | 'source' | 'matching' | 'results'
 type SourceType = 'project' | 'file'
-type FilterMode = 'all' | 'high' | 'medium' | 'low' | 'priced' | 'unpriced' | 'price-range'
+type FilterMode = 'all' | 'high' | 'medium' | 'low' | 'priced' | 'unpriced' | 'price-range' | 'excluded'
 
 // ─── BOQ Parser ───────────────────────────────────────────────────────────────
 
@@ -129,23 +130,24 @@ function isExcluded(item: RawItem, excludes: ExcludeEntry[]): boolean {
 
 function matchItems(newItems: RawItem[], refItems: RawItem[], excludes: ExcludeEntry[]): {
   matched: MatchedItem[]
-  excluded: RawItem[]
+  excludedItems: RawItem[]
 } {
   const matched: MatchedItem[] = []
-  const excluded: RawItem[] = []
+  const excludedItems: RawItem[] = []
 
   for (const item of newItems) {
-    if (isExcluded(item, excludes)) {
-      excluded.push(item)
-      continue
-    }
+    const excl = isExcluded(item, excludes)
+    if (excl) excludedItems.push(item)
+
     let bestScore = 0
     let bestRef: RawItem | null = null
-    for (const ref of refItems) {
-      const s = scoreItems(item, ref)
-      if (s > bestScore) { bestScore = s; bestRef = ref }
+    if (!excl) {
+      for (const ref of refItems) {
+        const s = scoreItems(item, ref)
+        if (s > bestScore) { bestScore = s; bestRef = ref }
+      }
     }
-    const matchedPrice = bestScore > 50 ? (bestRef?.unit_price ?? null) : null
+    const matchedPrice = !excl && bestScore > 50 ? (bestRef?.unit_price ?? null) : null
     const effectiveUnitPrice = matchedPrice
     const effectiveTotal =
       effectiveUnitPrice != null && item.quantity != null
@@ -154,15 +156,16 @@ function matchItems(newItems: RawItem[], refItems: RawItem[], excludes: ExcludeE
       ...item,
       refCode: bestRef?.item_code ?? '',
       refDescription: bestRef?.description ?? '',
-      matchScore: bestScore,
-      matchLabel: matchLabel(bestScore),
+      matchScore: excl ? 0 : bestScore,
+      matchLabel: excl ? 'Low' : matchLabel(bestScore),
       matchedUnitPrice: matchedPrice,
       manualUnitPrice: '',
       effectiveUnitPrice,
       effectiveTotal,
+      excluded: excl,
     })
   }
-  return { matched, excluded }
+  return { matched, excludedItems }
 }
 
 function groupByChapter(items: MatchedItem[]): Chapter[] {
@@ -173,15 +176,18 @@ function groupByChapter(items: MatchedItem[]): Chapter[] {
   }
   return Array.from(map.entries())
     .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
-    .map(([id, chItems]) => ({
-      id,
-      name: chItems[0].chapter_name || id,
-      items: chItems,
-      subtotal: chItems.reduce((s, i) => s + (i.effectiveTotal ?? 0), 0),
-      avgMatchScore: chItems.length
-        ? Math.round(chItems.reduce((s, i) => s + i.matchScore, 0) / chItems.length)
-        : 0,
-    }))
+    .map(([id, chItems]) => {
+      const activeItems = chItems.filter(i => !i.excluded)
+      return {
+        id,
+        name: chItems[0].chapter_name || id,
+        items: chItems,
+        subtotal: activeItems.reduce((s, i) => s + (i.effectiveTotal ?? 0), 0),
+        avgMatchScore: activeItems.length
+          ? Math.round(activeItems.reduce((s, i) => s + i.matchScore, 0) / activeItems.length)
+          : 0,
+      }
+    })
 }
 
 // ─── Colours ──────────────────────────────────────────────────────────────────
@@ -247,7 +253,6 @@ export default function PricingPage() {
 
   const [chapters, setChapters] = useState<Chapter[]>([])
   const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set())
-  const [excludedCount, setExcludedCount] = useState(0)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
@@ -338,17 +343,16 @@ export default function PricingPage() {
     const excludesData = await excludesRes.json()
     const excludes: ExcludeEntry[] = excludesData.excludes ?? []
 
-    const { matched, excluded } = matchItems(unpricedItems, refItems, excludes)
+    const { matched, excludedItems } = matchItems(unpricedItems, refItems, excludes)
 
-    if (excluded.length > 0) {
+    if (excludedItems.length > 0) {
       await fetch(`/api/pricing-projects/${pricingId}/alerts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(excluded.map(e => ({ item_code: e.item_code, description: e.description }))),
+        body: JSON.stringify(excludedItems.map(e => ({ item_code: e.item_code, description: e.description }))),
       })
     }
 
-    setExcludedCount(excluded.length)
     const grouped = groupByChapter(matched)
     setChapters(grouped)
     setExpandedChapters(new Set(grouped.map(c => c.id)))
@@ -387,10 +391,12 @@ export default function PricingPage() {
 
   const totalCost = chapters.reduce((s, c) => s + c.subtotal, 0)
   const allItems = chapters.flatMap(c => c.items)
-  const pricedCount = allItems.filter(i => i.effectiveUnitPrice != null).length
-  const unpricedCount = allItems.length - pricedCount
-  const overallScore = allItems.length
-    ? Math.round(allItems.reduce((s, i) => s + i.matchScore, 0) / allItems.length) : 0
+  const activeItems = allItems.filter(i => !i.excluded)
+  const excludedItemCount = allItems.length - activeItems.length
+  const pricedCount = activeItems.filter(i => i.effectiveUnitPrice != null).length
+  const unpricedCount = activeItems.length - pricedCount
+  const overallScore = activeItems.length
+    ? Math.round(activeItems.reduce((s, i) => s + i.matchScore, 0) / activeItems.length) : 0
 
   const matchDist = (
     [['High', '#16a34a'], ['Medium', '#ca8a04'], ['Low', '#dc2626']] as [MatchLabel, string][]
@@ -415,11 +421,12 @@ export default function PricingPage() {
       if (!haystack.includes(q)) return false
     }
     switch (filterMode) {
-      case 'high':    return item.matchScore >= 81
-      case 'medium':  return item.matchScore >= 51 && item.matchScore <= 80
-      case 'low':     return item.matchScore <= 50
-      case 'priced':  return item.effectiveUnitPrice != null
-      case 'unpriced':return item.effectiveUnitPrice == null
+      case 'high':    return !item.excluded && item.matchScore >= 81
+      case 'medium':  return !item.excluded && item.matchScore >= 51 && item.matchScore <= 80
+      case 'low':     return !item.excluded && item.matchScore <= 50
+      case 'priced':   return item.effectiveUnitPrice != null && !item.excluded
+      case 'unpriced': return item.effectiveUnitPrice == null && !item.excluded
+      case 'excluded': return item.excluded
       case 'price-range': {
         const price = item.effectiveUnitPrice ?? 0
         const min = parseFloat(priceMin)
@@ -552,7 +559,7 @@ export default function PricingPage() {
           <h1 className="text-2xl font-bold text-gray-900">Pricing Results</h1>
           <p className="text-sm text-gray-500 mt-0.5">
             {unpricedFile?.name} · {allItems.length} items · review and fill missing prices
-            {excludedCount > 0 && <span className="ml-2 text-orange-600">· {excludedCount} excluded</span>}
+            {excludedItemCount > 0 && <span className="ml-2 text-orange-600">· {excludedItemCount} excluded</span>}
           </p>
         </div>
         <div className="flex gap-2">
@@ -570,10 +577,10 @@ export default function PricingPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard label="Total Items" value={allItems.length.toString()} />
         <KpiCard label="Priced Items"
-          value={`${pricedCount} (${allItems.length ? Math.round(pricedCount / allItems.length * 100) : 0}%)`}
+          value={`${pricedCount} (${activeItems.length ? Math.round(pricedCount / activeItems.length * 100) : 0}%)`}
           color="green" />
         <KpiCard label="Unpriced Items"
-          value={`${unpricedCount} (${allItems.length ? Math.round(unpricedCount / allItems.length * 100) : 0}%)`}
+          value={`${unpricedCount} (${activeItems.length ? Math.round(unpricedCount / activeItems.length * 100) : 0}%)`}
           color={unpricedCount > 0 ? 'red' : 'green'} />
         <KpiCard label="Overall Match Score" value={`${overallScore}%`}
           color={overallScore >= 81 ? 'green' : overallScore >= 51 ? 'yellow' : 'red'} />
@@ -663,6 +670,7 @@ export default function PricingPage() {
                 ['low',        '🔴 Low (0–50%)'],
                 ['priced',     'Priced Only'],
                 ['unpriced',   'Unpriced Only'],
+                ['excluded',   'Excluded'],
                 ['price-range','Price Range'],
               ] as [FilterMode, string][]
             ).map(([mode, label]) => (
@@ -747,48 +755,67 @@ export default function PricingPage() {
                       {displayItems.map((item) => {
                         const realIdx = ch.items.indexOf(item)
                         const labelColor = MATCH_COLORS[item.matchLabel]
-                        const needsPrice = item.effectiveUnitPrice == null
+                        const needsPrice = item.effectiveUnitPrice == null && !item.excluded
 
                         return (
-                          <tr key={item.item_code}
-                            className={needsPrice ? 'bg-red-50/40' : 'hover:bg-gray-50/60'}>
-                            <td className="px-4 py-2 text-gray-500 font-mono">{item.item_code}</td>
-                            <td className="px-4 py-2 text-gray-800 max-w-xs">
-                              <div className="truncate" title={item.description}>{item.description}</div>
-                              {item.refDescription && item.refDescription !== item.description && (
-                                <div className="text-gray-400 truncate text-[10px] mt-0.5" title={item.refDescription}>
-                                  ↳ {item.refDescription}
+                          <tr key={`${item.item_code}-${realIdx}`}
+                            className={item.excluded ? 'bg-gray-50/60 opacity-60' : needsPrice ? 'bg-red-50/40' : 'hover:bg-gray-50/60'}>
+                            <td className="px-4 py-2 font-mono" style={{ color: item.excluded ? '#9ca3af' : '#6b7280' }}>
+                              {item.item_code}
+                            </td>
+                            <td className="px-4 py-2 max-w-xs">
+                              <div className="flex items-start gap-1.5">
+                                {item.excluded && (
+                                  <span className="flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 tracking-wide mt-0.5">EXC</span>
+                                )}
+                                <div>
+                                  <div className={`truncate ${item.excluded ? 'line-through text-gray-400' : 'text-gray-800'}`} title={item.description}>
+                                    {item.description}
+                                  </div>
+                                  {!item.excluded && item.refDescription && item.refDescription !== item.description && (
+                                    <div className="text-gray-400 truncate text-[10px] mt-0.5" title={item.refDescription}>
+                                      ↳ {item.refDescription}
+                                    </div>
+                                  )}
                                 </div>
-                              )}
+                              </div>
                             </td>
                             <td className="px-4 py-2 text-right text-gray-600">{item.unit}</td>
                             <td className="px-4 py-2 text-right text-gray-700">
                               {item.quantity?.toLocaleString('es-ES') ?? '—'}
                             </td>
                             <td className="px-4 py-2 text-right">
-                              <input
-                                type="number" min="0" step="0.01"
-                                placeholder={item.matchedUnitPrice != null ? fmt(item.matchedUnitPrice) : 'Enter price'}
-                                value={item.manualUnitPrice}
-                                onChange={e => updateManualPrice(chIdx, realIdx, e.target.value)}
-                                className={`w-full text-right border rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 ${
-                                  needsPrice
-                                    ? 'border-red-300 bg-red-50 placeholder-red-300'
-                                    : 'border-gray-200 bg-white placeholder-gray-300'
-                                }`}
-                              />
+                              {item.excluded ? (
+                                <span className="text-gray-400 text-xs">—</span>
+                              ) : (
+                                <input
+                                  type="number" min="0" step="0.01"
+                                  placeholder={item.matchedUnitPrice != null ? fmt(item.matchedUnitPrice) : 'Enter price'}
+                                  value={item.manualUnitPrice}
+                                  onChange={e => updateManualPrice(chIdx, realIdx, e.target.value)}
+                                  className={`w-full text-right border rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 ${
+                                    needsPrice
+                                      ? 'border-red-300 bg-red-50 placeholder-red-300'
+                                      : 'border-gray-200 bg-white placeholder-gray-300'
+                                  }`}
+                                />
+                              )}
                             </td>
                             <td className="px-4 py-2 text-right text-gray-700 font-medium">
-                              {item.effectiveTotal != null ? `€${fmt(item.effectiveTotal)}` : '—'}
+                              {item.excluded ? '—' : item.effectiveTotal != null ? `€${fmt(item.effectiveTotal)}` : '—'}
                             </td>
                             <td className="px-4 py-2 text-center">
-                              <div className="flex flex-col items-center gap-0.5">
-                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
-                                  style={{ background: `${labelColor}1a`, color: labelColor }}>
-                                  {item.matchScore}%
-                                </span>
-                                <span className="text-[9px] text-gray-400">{MATCH_EMOJI[item.matchLabel]}</span>
-                              </div>
+                              {item.excluded ? (
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-500">EXC</span>
+                              ) : (
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                                    style={{ background: `${labelColor}1a`, color: labelColor }}>
+                                    {item.matchScore}%
+                                  </span>
+                                  <span className="text-[9px] text-gray-400">{MATCH_EMOJI[item.matchLabel]}</span>
+                                </div>
+                              )}
                             </td>
                           </tr>
                         )
