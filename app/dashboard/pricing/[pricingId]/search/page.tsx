@@ -37,7 +37,10 @@ function parseBoqBuffer(buffer: ArrayBuffer): RawItem[] {
     if (!code || !nat) continue
     if (nat === 'Capítulo' || nat === 'Capitulo') {
       chapterNames.set(code, desc)
-    } else if (nat === 'Partida') {
+    } else {
+      // Accept any nat value that isn't a chapter header — covers 'Partida' and
+      // any other line-item label used by non-standard BOQ exports.
+      if (!desc) continue
       const topChapter = code.split('.')[0]
       items.push({
         item_code: code,
@@ -323,7 +326,7 @@ export default function SearchPage() {
                   {singleResults.map(({ item, score }, idx) => {
                     const isTop = score === maxSingle && score > 0
                     return (
-                      <tr key={idx} className={isTop ? 'bg-green-50' : score === 0 ? 'opacity-40' : ''}>
+                      <tr key={idx} className={isTop ? 'bg-green-50' : ''}>
                         <td className="px-4 py-2.5">
                           <span className={`inline-flex items-center justify-center w-10 h-6 rounded text-xs font-semibold ${
                             isTop ? 'bg-green-600 text-white' : score >= 51 ? 'bg-gray-200 text-gray-700' : 'text-gray-400'
@@ -417,7 +420,7 @@ export default function SearchPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {boqResults.map(({ unpriced, best, score }, idx) => (
-                    <tr key={idx} className={score >= 81 ? 'bg-green-50' : score === 0 ? 'opacity-40' : ''}>
+                    <tr key={idx} className={score >= 81 ? 'bg-green-50' : ''}>
                       <td className="px-3 py-2.5 font-mono text-xs text-gray-400">{unpriced.item_code}</td>
                       <td className="px-3 py-2.5 text-gray-800">{unpriced.description}</td>
                       <td className="px-3 py-2.5">
