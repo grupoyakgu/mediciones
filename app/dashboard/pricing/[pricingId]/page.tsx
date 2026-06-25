@@ -90,14 +90,15 @@ function parseBoqBuffer(buffer: ArrayBuffer): RawItem[] {
 // ─── Matching Logic ───────────────────────────────────────────────────────────
 
 const STOP_WORDS = new Set([
-  'de','del','la','el','los','las','en','y','a','para','con','por','se','un','una',
-  'o','al','e','su','sus','que','es','son','si','lo','le','les','no','i','ii','iii',
+  'de','del','de la','la','el','los','las','en','y','a','para','con','por','se',
+  'un','una','o','al','e','su','sus','que','es','son','si','lo','le','les','no',
+  'i','ii','iii','iv','v','tipo','n','nd',
 ])
 
 function normalize(s: string) {
   return s
     .toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '') // strip accents: á→a, é→e …
+    .normalize('NFD').replace(/[̀-ͯ]/g, '') // strip accents: á→a
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
@@ -107,9 +108,82 @@ function tokens(s: string): string[] {
   return normalize(s).split(' ').filter(t => t.length > 1 && !STOP_WORDS.has(t))
 }
 
+// Character trigram similarity — handles morphological variants:
+// "instalacion" vs "instalaciones", "pintura" vs "pinturas"
+function charTrigramSim(a: string, b: string): number {
+  if (a === b) return 1
+  const minLen = Math.min(a.length, b.length)
+  if (minLen < 3) return a.startsWith(b) || b.startsWith(a) ? 0.8 : 0
+  const ngA = new Set<string>(), ngB = new Set<string>()
+  for (let i = 0; i <= a.length - 3; i++) ngA.add(a.slice(i, i + 3))
+  for (let i = 0; i <= b.length - 3; i++) ngB.add(b.slice(i, i + 3))
+  let inter = 0
+  ngA.forEach(g => { if (ngB.has(g)) inter++ })
+  const union = ngA.size + ngB.size - inter
+  return union === 0 ? 0 : inter / union
+}
+
+// Find best fuzzy match for a token among candidates (returns 0–1)
+function bestFuzzyMatch(tok: string, candidates: string[]): number {
+  let best = 0
+  for (const c of candidates) {
+    if (tok === c) return 1
+    // Only attempt trigram match for tokens long enough to produce trigrams
+    if (tok.length >= 4 && c.length >= 4) {
+      const sim = charTrigramSim(tok, c)
+      if (sim > best) best = sim
+    }
+  }
+  return best
+}
+
+// Compute IDF weights from the reference corpus once per matching run
+function buildIdf(refItems: RawItem[]): Map<string, number> {
+  const N = Math.max(refItems.length, 1)
+  const df = new Map<string, number>()
+  for (const item of refItems) {
+    const seen = new Set(tokens(item.description))
+    seen.forEach(t => df.set(t, (df.get(t) ?? 0) + 1))
+  }
+  const idf = new Map<string, number>()
+  df.forEach((count, t) => {
+    // Smoothed IDF: log((N+1)/(df+1))+1  — rare terms get high weight
+    idf.set(t, Math.log((N + 1) / (count + 1)) + 1)
+  })
+  return idf
+}
+
+// IDF-weighted F1: measures both how much of A is covered by B (precision)
+// and how much of B covers A (recall), then combines via harmonic mean.
+// Fuzzy token matching means "instalacion" still matches "instalaciones".
+function idfWeightedF1(tokA: string[], tokB: string[], idf: Map<string, number>): number {
+  if (!tokA.length || !tokB.length) return 0
+
+  const DEFAULT_IDF = Math.log(2) // baseline for unknown tokens
+
+  let wScoreAB = 0, wTotalA = 0
+  for (const ta of tokA) {
+    const w = idf.get(ta) ?? DEFAULT_IDF
+    wTotalA += w
+    wScoreAB += w * bestFuzzyMatch(ta, tokB)
+  }
+
+  let wScoreBA = 0, wTotalB = 0
+  for (const tb of tokB) {
+    const w = idf.get(tb) ?? DEFAULT_IDF
+    wTotalB += w
+    wScoreBA += w * bestFuzzyMatch(tb, tokA)
+  }
+
+  const precision = wTotalA > 0 ? wScoreAB / wTotalA : 0
+  const recall    = wTotalB > 0 ? wScoreBA / wTotalB : 0
+  if (precision + recall === 0) return 0
+  return (2 * precision * recall) / (precision + recall)
+}
+
+// LCS on token arrays — order-sensitive overlap
 function lcsLength(a: string[], b: string[]): number {
-  if (a.length === 0 || b.length === 0) return 0
-  // Use two-row DP to save memory
+  if (!a.length || !b.length) return 0
   let prev = new Array(b.length + 1).fill(0)
   for (let i = 0; i < a.length; i++) {
     const curr = new Array(b.length + 1).fill(0)
@@ -120,29 +194,7 @@ function lcsLength(a: string[], b: string[]): number {
   return prev[b.length]
 }
 
-function bigramJaccard(tokA: string[], tokB: string[]): number {
-  if (tokA.length < 2 || tokB.length < 2) return 0
-  const setA = new Set<string>()
-  const setB = new Set<string>()
-  for (let i = 0; i < tokA.length - 1; i++) setA.add(`${tokA[i]} ${tokA[i + 1]}`)
-  for (let i = 0; i < tokB.length - 1; i++) setB.add(`${tokB[i]} ${tokB[i + 1]}`)
-  let inter = 0
-  setA.forEach(bg => { if (setB.has(bg)) inter++ })
-  const union = setA.size + setB.size - inter
-  return union === 0 ? 0 : inter / union
-}
-
-function unigramJaccard(tokA: string[], tokB: string[]): number {
-  if (tokA.length === 0 || tokB.length === 0) return 0
-  const setA = new Set(tokA)
-  const setB = new Set(tokB)
-  let inter = 0
-  setA.forEach(t => { if (setB.has(t)) inter++ })
-  const union = setA.size + setB.size - inter
-  return union === 0 ? 0 : inter / union
-}
-
-function scoreItems(a: RawItem, b: RawItem): number {
+function scoreItems(a: RawItem, b: RawItem, idf: Map<string, number>): number {
   const normCodeA = normalize(a.item_code)
   const normCodeB = normalize(b.item_code)
 
@@ -152,42 +204,37 @@ function scoreItems(a: RawItem, b: RawItem): number {
   const normDescA = normalize(a.description)
   const normDescB = normalize(b.description)
 
-  // Exact description match
-  if (normDescA && normDescA === normDescB) return 98
+  // Exact description match → near-perfect (description beats code)
+  if (normDescA && normDescA === normDescB) return 99
 
   const tokA = tokens(a.description)
   const tokB = tokens(b.description)
 
-  if (tokA.length === 0 || tokB.length === 0) {
-    // Fall back to code similarity only
-    const codeTokA = tokens(a.item_code)
-    const codeTokB = tokens(b.item_code)
-    return Math.round(unigramJaccard(codeTokA, codeTokB) * 40)
-  }
+  if (!tokA.length && !tokB.length) return 0
 
-  // LCS ratio: how much of the longer description appears in-order in the other
+  // Primary: IDF-weighted fuzzy F1 (handles rare words, morphology, synonymy)
+  const f1Score = idfWeightedF1(tokA, tokB, idf)
+
+  // Secondary: LCS ratio — rewards same-order word runs
   const lcs = lcsLength(tokA, tokB)
-  const lcsScore = lcs / Math.max(tokA.length, tokB.length)
+  const lcsScore = tokA.length && tokB.length
+    ? lcs / Math.max(tokA.length, tokB.length) : 0
 
-  // Bigram (adjacent word pairs preserve local phrase order)
-  const bgScore = bigramJaccard(tokA, tokB)
+  // Tertiary: coverage — short description fully contained in longer one
+  const coverageScore = tokA.length && tokB.length
+    ? lcs / Math.min(tokA.length, tokB.length) : 0
 
-  // Unigram Jaccard (word overlap ignoring order — catches synonym-heavy descriptions)
-  const jScore = unigramJaccard(tokA, tokB)
+  // Description composite (order matters: F1 dominant)
+  const descScore = f1Score * 0.55 + lcsScore * 0.25 + coverageScore * 0.20
 
-  // Coverage: what fraction of the shorter description is covered by LCS
-  // (a short description fully contained inside a long one should score well)
-  const coverageScore = lcs / Math.min(tokA.length, tokB.length)
-
-  // Combine: order-sensitive signals weighted higher, with coverage bonus
-  const descScore = lcsScore * 0.40 + bgScore * 0.25 + jScore * 0.20 + coverageScore * 0.15
-
-  // Code similarity as small tiebreaker
+  // Code fuzzy similarity (small tiebreaker — never overrides description)
   const codeTokA = tokens(a.item_code)
   const codeTokB = tokens(b.item_code)
-  const codeScore = unigramJaccard(codeTokA, codeTokB)
+  const codeScore = codeTokA.length && codeTokB.length
+    ? idfWeightedF1(codeTokA, codeTokB, idf) : 0
 
-  return Math.round((descScore * 0.9 + codeScore * 0.1) * 100)
+  // Description is 92% of the score — code is a tiebreaker only
+  return Math.round((descScore * 0.92 + codeScore * 0.08) * 100)
 }
 
 function matchLabel(score: number): MatchLabel {
@@ -208,6 +255,7 @@ function matchItems(newItems: RawItem[], refItems: RawItem[], excludes: ExcludeE
   matched: MatchedItem[]
   excludedItems: RawItem[]
 } {
+  const idf = buildIdf(refItems)
   const matched: MatchedItem[] = []
   const excludedItems: RawItem[] = []
 
@@ -219,7 +267,7 @@ function matchItems(newItems: RawItem[], refItems: RawItem[], excludes: ExcludeE
     let bestRef: RawItem | null = null
     if (!excl) {
       for (const ref of refItems) {
-        const s = scoreItems(item, ref)
+        const s = scoreItems(item, ref, idf)
         if (s > bestScore) { bestScore = s; bestRef = ref }
       }
     }
