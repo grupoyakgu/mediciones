@@ -196,26 +196,13 @@ function lcsLength(a: string[], b: string[]): number {
   return prev[b.length]
 }
 
-// A "structured" code has at least one dot separator (e.g. "09.04.02").
-// Short alphanumeric labels like "A01" or "E1" are BOQ-internal designators
-// that may collide between unrelated projects — exclude them from exact-match.
-function isStructuredCode(code: string): boolean {
-  return code.includes('.')
-}
-
 function scoreItems(a: RawItem, b: RawItem, idf: Map<string, number>): number {
-  const normCodeA = normalize(a.item_code)
-  const normCodeB = normalize(b.item_code)
-
-  // Exact code match only when both codes are structured (contain a dot),
-  // preventing short labels like "A01" from colliding across different BOQ schemas.
-  if (normCodeA && normCodeA === normCodeB && isStructuredCode(a.item_code) && isStructuredCode(b.item_code)) return 100
 
   const normDescA = normalize(a.description)
   const normDescB = normalize(b.description)
 
-  // Exact description match → near-perfect (description beats code)
-  if (normDescA && normDescA === normDescB) return 99
+  // Exact description match → perfect score
+  if (normDescA && normDescA === normDescB) return 100
 
   const tokA = tokens(a.description)
   const tokB = tokens(b.description)

@@ -146,15 +146,9 @@ function lcsLength(a: string[], b: string[]): number {
   return prev[b.length]
 }
 
-function isStructuredCode(code: string): boolean {
-  return code.includes('.')
-}
-
 function scoreItems(a: { item_code: string; description: string }, b: RawItem, idf: Map<string, number>): number {
-  const normCodeA = normalize(a.item_code), normCodeB = normalize(b.item_code)
-  if (normCodeA && normCodeA === normCodeB && isStructuredCode(a.item_code) && isStructuredCode(b.item_code)) return 100
   const normDescA = normalize(a.description), normDescB = normalize(b.description)
-  if (normDescA && normDescA === normDescB) return 99
+  if (normDescA && normDescA === normDescB) return 100
   const tokA = tokens(a.description), tokB = tokens(b.description)
   if (!tokA.length && !tokB.length) return 0
   const f1Score = idfWeightedF1(tokA, tokB, idf)
