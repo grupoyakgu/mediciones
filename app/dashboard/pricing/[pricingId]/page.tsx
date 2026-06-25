@@ -1,325 +1,21 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import * as XLSX from 'xlsx'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
   PieChart, Pie, Legend,
 } from 'recharts'
-
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-interface RawItem {
-  item_code: string
-  chapter_id: string
-  chapter_name: string
-  description: string
-  unit: string
-  quantity: number | null
-  unit_price: number | null
-  total_amount: number | null
-}
-
-type MatchLabel = 'High' | 'Medium' | 'Low'
-
-interface MatchedItem extends RawItem {
-  refCode: string
-  refDescription: string
-  matchScore: number
-  matchLabel: MatchLabel
-  matchedUnitPrice: number | null
-  manualUnitPrice: string
-  effectiveUnitPrice: number | null
-  effectiveTotal: number | null
-  excluded: boolean
-}
-
-interface Chapter {
-  id: string
-  name: string
-  items: MatchedItem[]
-  subtotal: number
-  avgMatchScore: number
-}
+import type { RawItem, MatchedItem, Chapter, ExcludeEntry } from '@/lib/pricing-matching'
+import { parseBoqBuffer, matchItems, groupByChapter, isExcluded } from '@/lib/pricing-matching'
 
 interface Project { id: string; name: string }
 
-interface ExcludeEntry { id: string; item_code?: string; description?: string }
-
-type Step = 'upload' | 'source' | 'matching' | 'results'
+type Step = 'source' | 'matching' | 'results'
 type SourceType = 'project' | 'file'
 type FilterMode = 'all' | 'high' | 'medium' | 'low' | 'priced' | 'unpriced' | 'price-range' | 'excluded'
-
-// ─── BOQ Parser ───────────────────────────────────────────────────────────────
-
-function toNum(v: unknown): number | null {
-  if (v == null || v === '') return null
-  const n = Number(v)
-  return isNaN(n) ? null : n
-}
-
-function parseBoqBuffer(buffer: ArrayBuffer): RawItem[] {
-  const wb = XLSX.read(buffer, { type: 'array' })
-  const sheet = wb.Sheets[wb.SheetNames[0]]
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true })
-  const chapterNames = new Map<string, string>()
-  const items: RawItem[] = []
-  for (const row of rows) {
-    if (!Array.isArray(row)) continue
-    const code = String(row[0] ?? '').trim()
-    const nat  = String(row[1] ?? '').trim()
-    const unit = String(row[2] ?? '').trim()
-    const desc = String(row[3] ?? '').trim()
-    if (!code || !nat) continue
-    if (nat === 'Capítulo' || nat === 'Capitulo') {
-      chapterNames.set(code, desc)
-    } else if (nat === 'Partida') {
-      const topChapter = code.split('.')[0]
-      items.push({
-        item_code: code, chapter_id: topChapter,
-        chapter_name: chapterNames.get(topChapter) ?? '',
-        description: desc, unit,
-        quantity: toNum(row[4]), unit_price: toNum(row[5]), total_amount: toNum(row[6]),
-      })
-    }
-  }
-  return items
-}
-
-// ─── Matching Logic ───────────────────────────────────────────────────────────
-
-const STOP_WORDS = new Set([
-  'de','del','de la','la','el','los','las','en','y','a','para','con','por','se',
-  'un','una','o','al','e','su','sus','que','es','son','si','lo','le','les','no',
-  'i','ii','iii','iv','v','tipo','n','nd',
-])
-
-function normalize(s: string) {
-  return s
-    .toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '') // strip accents: á→a
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function tokens(s: string): string[] {
-  return normalize(s).split(' ').filter(t => t.length > 1 && !STOP_WORDS.has(t))
-}
-
-// Character trigram similarity — handles morphological variants:
-// "instalacion" vs "instalaciones", "pintura" vs "pinturas"
-function charTrigramSim(a: string, b: string): number {
-  if (a === b) return 1
-  const minLen = Math.min(a.length, b.length)
-  if (minLen < 3) return a.startsWith(b) || b.startsWith(a) ? 0.8 : 0
-  const ngA = new Set<string>(), ngB = new Set<string>()
-  for (let i = 0; i <= a.length - 3; i++) ngA.add(a.slice(i, i + 3))
-  for (let i = 0; i <= b.length - 3; i++) ngB.add(b.slice(i, i + 3))
-  let inter = 0
-  ngA.forEach(g => { if (ngB.has(g)) inter++ })
-  const union = ngA.size + ngB.size - inter
-  return union === 0 ? 0 : inter / union
-}
-
-// Find best fuzzy match for a token among candidates (returns 0–1).
-// Requires trigram sim > 0.5 to reject weak false-positive matches
-// (e.g. "interior" ≈ "exteriores" shares trigrams but scores only 0.4 → rejected).
-function bestFuzzyMatch(tok: string, candidates: string[]): number {
-  let best = 0
-  for (const c of candidates) {
-    if (tok === c) return 1
-    if (tok.length >= 4 && c.length >= 4) {
-      const sim = charTrigramSim(tok, c)
-      if (sim > 0.5 && sim > best) best = sim
-    }
-  }
-  return best
-}
-
-// Compute IDF weights from the reference corpus once per matching run
-function buildIdf(refItems: RawItem[]): Map<string, number> {
-  const N = Math.max(refItems.length, 1)
-  const df = new Map<string, number>()
-  for (const item of refItems) {
-    const seen = new Set(tokens(item.description))
-    seen.forEach(t => df.set(t, (df.get(t) ?? 0) + 1))
-  }
-  const idf = new Map<string, number>()
-  df.forEach((count, t) => {
-    // Smoothed IDF: log((N+1)/(df+1))+1  — rare terms get high weight
-    idf.set(t, Math.log((N + 1) / (count + 1)) + 1)
-  })
-  return idf
-}
-
-// IDF-weighted F1 with position decay.
-// Token weight = IDF × 1/(1+position) so the primary noun at position 0
-// ("Barandilla" in "Barandilla A1") dominates over type codes at later positions.
-// This prevents a single shared code token from beating a shared primary noun.
-function idfWeightedF1(tokA: string[], tokB: string[], idf: Map<string, number>): number {
-  if (!tokA.length || !tokB.length) return 0
-
-  const DEFAULT_IDF = Math.log(2)
-
-  let wScoreAB = 0, wTotalA = 0
-  for (let i = 0; i < tokA.length; i++) {
-    const w = (idf.get(tokA[i]) ?? DEFAULT_IDF) * (1 / (1 + i))
-    wTotalA += w
-    wScoreAB += w * bestFuzzyMatch(tokA[i], tokB)
-  }
-
-  let wScoreBA = 0, wTotalB = 0
-  for (let j = 0; j < tokB.length; j++) {
-    const w = (idf.get(tokB[j]) ?? DEFAULT_IDF) * (1 / (1 + j))
-    wTotalB += w
-    wScoreBA += w * bestFuzzyMatch(tokB[j], tokA)
-  }
-
-  const precision = wTotalA > 0 ? wScoreAB / wTotalA : 0
-  const recall    = wTotalB > 0 ? wScoreBA / wTotalB : 0
-  if (precision + recall === 0) return 0
-  return (2 * precision * recall) / (precision + recall)
-}
-
-// LCS on token arrays — order-sensitive overlap
-function lcsLength(a: string[], b: string[]): number {
-  if (!a.length || !b.length) return 0
-  let prev = new Array(b.length + 1).fill(0)
-  for (let i = 0; i < a.length; i++) {
-    const curr = new Array(b.length + 1).fill(0)
-    for (let j = 0; j < b.length; j++)
-      curr[j + 1] = a[i] === b[j] ? prev[j] + 1 : Math.max(prev[j + 1], curr[j])
-    prev = curr
-  }
-  return prev[b.length]
-}
-
-function scoreItems(a: RawItem, b: RawItem, idf: Map<string, number>): number {
-
-  const normDescA = normalize(a.description)
-  const normDescB = normalize(b.description)
-
-  // Exact description match → perfect score
-  if (normDescA && normDescA === normDescB) return 100
-
-  const tokA = tokens(a.description)
-  const tokB = tokens(b.description)
-
-  if (!tokA.length && !tokB.length) return 0
-
-  // Primary: position-weighted IDF F1
-  const f1Score = idfWeightedF1(tokA, tokB, idf)
-
-  // Secondary: LCS ratio — rewards same-order word runs
-  const lcs = lcsLength(tokA, tokB)
-  const lcsScore = tokA.length && tokB.length
-    ? lcs / Math.max(tokA.length, tokB.length) : 0
-
-  // Coverage removed: it inflated single-token references to 100% and
-  // caused short "Tipo A1" to outscore "Barandilla escalera tipo C1".
-  const descScore = f1Score * 0.65 + lcsScore * 0.35
-
-  // Code fuzzy similarity (small tiebreaker — never overrides description)
-  const codeTokA = tokens(a.item_code)
-  const codeTokB = tokens(b.item_code)
-  const codeScore = codeTokA.length && codeTokB.length
-    ? idfWeightedF1(codeTokA, codeTokB, idf) : 0
-
-  // Description is 92% of the score — code is a tiebreaker only
-  return Math.round((descScore * 0.92 + codeScore * 0.08) * 100)
-}
-
-function matchLabel(score: number): MatchLabel {
-  if (score >= 81) return 'High'
-  if (score >= 51) return 'Medium'
-  return 'Low'
-}
-
-function isExcluded(item: RawItem, excludes: ExcludeEntry[]): boolean {
-  for (const ex of excludes) {
-    if (ex.item_code && normalize(item.item_code) === normalize(ex.item_code)) return true
-    if (ex.description && normalize(item.description).includes(normalize(ex.description))) return true
-  }
-  return false
-}
-
-function matchItems(newItems: RawItem[], refItems: RawItem[], excludes: ExcludeEntry[]): {
-  matched: MatchedItem[]
-  excludedItems: RawItem[]
-} {
-  const idf = buildIdf(refItems)
-  const matched: MatchedItem[] = []
-  const excludedItems: RawItem[] = []
-
-  for (const item of newItems) {
-    const excl = isExcluded(item, excludes)
-    if (excl) excludedItems.push(item)
-
-    let bestScore = 0
-    let bestRef: RawItem | null = null
-    if (!excl) {
-      // DEBUG: log top-5 candidates for items whose description contains "pintura"
-      const debugItem = /pintura/i.test(item.description)
-      const allScores: { score: number; ref: RawItem }[] = []
-      for (const ref of refItems) {
-        const s = scoreItems(item, ref, idf)
-        if (debugItem) allScores.push({ score: s, ref })
-        if (s > bestScore) { bestScore = s; bestRef = ref }
-      }
-      if (debugItem) {
-        allScores.sort((a, b) => b.score - a.score)
-        console.log(`[MATCH DEBUG] item: "${item.item_code}" / "${item.description}"`)
-        console.log(`  winner → "${bestRef?.item_code}" / "${bestRef?.description}" score=${bestScore}`)
-        console.log('  top 5 candidates:')
-        allScores.slice(0, 5).forEach(({ score, ref }) =>
-          console.log(`    score=${score}  code="${ref.item_code}"  desc="${ref.description}"`)
-        )
-      }
-    }
-    const matchedPrice = !excl && bestScore > 50 ? (bestRef?.unit_price ?? null) : null
-    const effectiveUnitPrice = matchedPrice
-    const effectiveTotal =
-      effectiveUnitPrice != null && item.quantity != null
-        ? effectiveUnitPrice * item.quantity : null
-    matched.push({
-      ...item,
-      refCode: bestRef?.item_code ?? '',
-      refDescription: bestRef?.description ?? '',
-      matchScore: excl ? 0 : bestScore,
-      matchLabel: excl ? 'Low' : matchLabel(bestScore),
-      matchedUnitPrice: matchedPrice,
-      manualUnitPrice: '',
-      effectiveUnitPrice,
-      effectiveTotal,
-      excluded: excl,
-    })
-  }
-  return { matched, excludedItems }
-}
-
-function groupByChapter(items: MatchedItem[]): Chapter[] {
-  const map = new Map<string, MatchedItem[]>()
-  for (const item of items) {
-    if (!map.has(item.chapter_id)) map.set(item.chapter_id, [])
-    map.get(item.chapter_id)!.push(item)
-  }
-  return Array.from(map.entries())
-    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
-    .map(([id, chItems]) => {
-      const activeItems = chItems.filter(i => !i.excluded)
-      return {
-        id,
-        name: chItems[0].chapter_name || id,
-        items: chItems,
-        subtotal: activeItems.reduce((s, i) => s + (i.effectiveTotal ?? 0), 0),
-        avgMatchScore: activeItems.length
-          ? Math.round(activeItems.reduce((s, i) => s + i.matchScore, 0) / activeItems.length)
-          : 0,
-      }
-    })
-}
+type MatchLabel = 'High' | 'Medium' | 'Low'
 
 // ─── Colours ──────────────────────────────────────────────────────────────────
 
@@ -368,9 +64,10 @@ function exportToExcel(chapters: Chapter[]) {
 
 export default function PricingPage() {
   const params = useParams()
+  const router = useRouter()
   const pricingId = params.pricingId as string
 
-  const [step, setStep] = useState<Step>('upload')
+  const [step, setStep] = useState<Step>('results')
   const [sourceType, setSourceType] = useState<SourceType>('project')
 
   const [unpricedFile, setUnpricedFile] = useState<File | null>(null)
@@ -395,7 +92,7 @@ export default function PricingPage() {
   const refInputRef = useRef<HTMLInputElement>(null)
   const chapterRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
-  // On mount, load saved results and current exclude list
+  // On mount, load saved results; redirect to list if none found
   useEffect(() => {
     fetch(`/api/pricing-projects/${pricingId}`)
       .then(r => r.json())
@@ -416,9 +113,12 @@ export default function PricingPage() {
             setUnpricedFile(new File([], d.project.unpriced_file_name))
           }
           setStep('results')
+        } else {
+          // No results yet — project was created but setup didn't complete; go back to list
+          router.replace('/dashboard/pricing')
         }
       })
-      .catch(() => { /* ignore, stay on upload step */ })
+      .catch(() => { router.replace('/dashboard/pricing') })
 
     fetch(`/api/pricing-projects/${pricingId}/excludes`)
       .then(r => r.json())
@@ -472,7 +172,7 @@ export default function PricingPage() {
     }
   }
 
-  async function proceedToSource() {
+  async function goToSourceStep() {
     if (!projectsLoaded) {
       const res = await fetch('/api/projects')
       const data = await res.json()
@@ -480,19 +180,6 @@ export default function PricingPage() {
       setProjectsLoaded(true)
     }
     setStep('source')
-  }
-
-  // "← Change Source" from results. If we already have results (the common case),
-  // go directly to source step — which now shows both the unpriced file and reference
-  // source sections. If somehow no results yet, fall back to the upload step.
-  async function goToUploadStep() {
-    if (!projectsLoaded) {
-      const res = await fetch('/api/projects')
-      const data = await res.json()
-      setProjects(data.projects ?? [])
-      setProjectsLoaded(true)
-    }
-    setStep(chapters.length > 0 ? 'source' : 'upload')
   }
 
   async function runMatching() {
@@ -640,47 +327,10 @@ export default function PricingPage() {
     }
   }
 
-  if (step === 'upload') return (
-    <div className="max-w-2xl mx-auto py-10 px-4">
-      <h1 className="text-2xl font-bold text-gray-900 mb-1">Project Pricing</h1>
-      <p className="text-sm text-gray-500 mb-8">
-        Upload an unpriced BOQ and get unit prices matched from a reference source.
-      </p>
-      <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
-        <div>
-          <p className="text-sm font-medium text-gray-700 mb-2">Step 1 — Upload unpriced BOQ file</p>
-          <input ref={unpricedInputRef} type="file" accept=".xlsx,.xls,.pdf" className="hidden"
-            onChange={e => { const f = e.target.files?.[0]; if (f) handleUnpricedFile(f); e.target.value = '' }} />
-          {unpricedFile ? (
-            <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-lg px-4 py-3">
-              <span className="text-green-600 text-lg">✓</span>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-green-800 truncate">{unpricedFile.name}</p>
-                <p className="text-xs text-green-600">{unpricedItems.length} line items parsed</p>
-              </div>
-              <button onClick={() => { setUnpricedFile(null); setUnpricedItems([]) }}
-                className="text-green-400 hover:text-green-700 text-sm">✕</button>
-            </div>
-          ) : (
-            <button onClick={() => unpricedInputRef.current?.click()}
-              className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 hover:bg-blue-50 transition-colors">
-              <p className="text-gray-500 text-sm">Click to select a BOQ file (.xlsx, .xls, or .pdf)</p>
-              <p className="text-gray-400 text-xs mt-1">Must follow the standard format (Column B = Capítulo / Partida)</p>
-            </button>
-          )}
-        </div>
-        <button disabled={!unpricedFile || unpricedItems.length === 0} onClick={proceedToSource}
-          className="w-full py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:bg-blue-700 transition-colors">
-          Continue →
-        </button>
-      </div>
-    </div>
-  )
-
   if (step === 'source') return (
     <div className="max-w-2xl mx-auto py-10 px-4">
       <button
-        onClick={() => chapters.length > 0 ? setStep('results') : setStep('upload')}
+        onClick={() => setStep('results')}
         className="text-sm text-blue-600 hover:underline mb-6 block"
       >← Back</button>
       <h1 className="text-2xl font-bold text-gray-900 mb-1">Change Source</h1>
@@ -793,7 +443,7 @@ export default function PricingPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button onClick={goToUploadStep}
+          <button onClick={goToSourceStep}
             className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
             ← Change Source
           </button>
