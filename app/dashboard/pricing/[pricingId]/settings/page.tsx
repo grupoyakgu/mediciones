@@ -58,11 +58,13 @@ export default function PricingSettingsPage() {
     setNewCode('')
     setNewDesc('')
     setAdding(false)
+    window.dispatchEvent(new Event('excludesChanged'))
   }
 
   async function removeExclude(id: string) {
     await fetch(`/api/pricing-projects/${pricingId}/excludes?id=${id}`, { method: 'DELETE' })
     setExcludes(prev => prev.filter(e => e.id !== id))
+    window.dispatchEvent(new Event('excludesChanged'))
   }
 
   return (

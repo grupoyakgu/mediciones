@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { useParams } from 'next/navigation'
 import * as XLSX from 'xlsx'
 import {
@@ -384,6 +384,7 @@ export default function PricingPage() {
 
   const [chapters, setChapters] = useState<Chapter[]>([])
   const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set())
+  const [excludes, setExcludes] = useState<ExcludeEntry[]>([])
 
   const [searchQuery, setSearchQuery] = useState('')
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
@@ -394,7 +395,7 @@ export default function PricingPage() {
   const refInputRef = useRef<HTMLInputElement>(null)
   const chapterRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
-  // On mount, check if this pricing project already has saved results
+  // On mount, load saved results and current exclude list
   useEffect(() => {
     fetch(`/api/pricing-projects/${pricingId}`)
       .then(r => r.json())
@@ -403,17 +404,11 @@ export default function PricingPage() {
           const savedChapters = d.project.results as Chapter[]
           setChapters(savedChapters)
           setExpandedChapters(new Set(savedChapters.map((c: Chapter) => c.id)))
-          // Restore unpricedItems so "Change Source → Re-run" works correctly
           const restored: RawItem[] = savedChapters.flatMap(ch =>
             ch.items.map(i => ({
-              item_code: i.item_code,
-              chapter_id: i.chapter_id,
-              chapter_name: i.chapter_name,
-              description: i.description,
-              unit: i.unit,
-              quantity: i.quantity,
-              unit_price: i.unit_price,
-              total_amount: i.total_amount,
+              item_code: i.item_code, chapter_id: i.chapter_id, chapter_name: i.chapter_name,
+              description: i.description, unit: i.unit, quantity: i.quantity,
+              unit_price: i.unit_price, total_amount: i.total_amount,
             }))
           )
           setUnpricedItems(restored)
@@ -424,7 +419,24 @@ export default function PricingPage() {
         }
       })
       .catch(() => { /* ignore, stay on upload step */ })
+
+    fetch(`/api/pricing-projects/${pricingId}/excludes`)
+      .then(r => r.json())
+      .then(d => setExcludes(d.excludes ?? []))
+      .catch(() => { /* non-critical */ })
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pricingId])
+
+  // Re-fetch excludes whenever Settings tab adds/removes an entry
+  useEffect(() => {
+    function onExcludesChanged() {
+      fetch(`/api/pricing-projects/${pricingId}/excludes`)
+        .then(r => r.json())
+        .then(d => setExcludes(d.excludes ?? []))
+        .catch(() => { /* non-critical */ })
+    }
+    window.addEventListener('excludesChanged', onExcludesChanged)
+    return () => window.removeEventListener('excludesChanged', onExcludesChanged)
   }, [pricingId])
 
   const scrollToChapter = useCallback((chapterId: string) => {
@@ -560,8 +572,24 @@ export default function PricingPage() {
       return next
     })
 
-  const totalCost = chapters.reduce((s, c) => s + c.subtotal, 0)
-  const allItems = chapters.flatMap(c => c.items)
+  // Apply live exclude list to chapters — overrides the stored excluded flag
+  const displayChapters = useMemo(() => chapters.map(ch => {
+    const items = ch.items.map(item => {
+      const excluded = isExcluded(item, excludes)
+      return { ...item, excluded }
+    })
+    const activeItems = items.filter(i => !i.excluded)
+    return {
+      ...ch,
+      items,
+      subtotal: activeItems.reduce((s, i) => s + (i.effectiveTotal ?? 0), 0),
+      avgMatchScore: activeItems.length
+        ? Math.round(activeItems.reduce((s, i) => s + i.matchScore, 0) / activeItems.length) : 0,
+    }
+  }), [chapters, excludes])
+
+  const totalCost = displayChapters.reduce((s, c) => s + c.subtotal, 0)
+  const allItems = displayChapters.flatMap(c => c.items)
   const activeItems = allItems.filter(i => !i.excluded)
   const excludedItemCount = allItems.length - activeItems.length
   const pricedCount = activeItems.filter(i => i.effectiveUnitPrice != null).length
@@ -578,7 +606,7 @@ export default function PricingPage() {
     value: allItems.filter(i => i.matchLabel === label).length,
   }))
 
-  const chapterBarData = chapters.map((c, i) => ({
+  const chapterBarData = displayChapters.map((c, i) => ({
     name: c.id, fullName: c.name,
     cost: Math.round(c.subtotal),
     color: CHART_PALETTE[i % CHART_PALETTE.length],
@@ -769,7 +797,7 @@ export default function PricingPage() {
             className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
             ← Change Source
           </button>
-          <button onClick={() => exportToExcel(chapters)}
+          <button onClick={() => exportToExcel(displayChapters)}
             className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium">
             ⬇ Export Excel
           </button>
@@ -842,7 +870,7 @@ export default function PricingPage() {
       <div className="space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="text-lg font-semibold text-gray-900">BOQ Detail</h2>
-          <button onClick={() => exportToExcel(chapters)}
+          <button onClick={() => exportToExcel(displayChapters)}
             className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium text-sm">
             ⬇ Export to Excel
           </button>
@@ -904,7 +932,7 @@ export default function PricingPage() {
           )}
         </div>
 
-        {chapters.map((ch, chIdx) => {
+        {displayChapters.map((ch, chIdx) => {
           const filteredItems = ch.items.filter(itemMatchesFilter)
           const isFiltering = searchQuery.trim() !== '' || filterMode !== 'all'
           if (isFiltering && filteredItems.length === 0) return null
@@ -1002,7 +1030,7 @@ export default function PricingPage() {
                                   placeholder={item.matchedUnitPrice != null ? fmt(item.matchedUnitPrice) : 'Enter price'}
                                   value={item.manualUnitPrice}
                                   onChange={e => updateManualPrice(chIdx, realIdx, e.target.value)}
-                                  onBlur={() => saveManualPricesToDB(chapters)}
+                                  onBlur={() => saveManualPricesToDB(displayChapters)}
                                   className={`w-full text-right border rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 ${
                                     needsPrice
                                       ? 'border-red-300 bg-red-50 placeholder-red-300'
