@@ -139,6 +139,18 @@ export default function PricingPage() {
     return () => window.removeEventListener('excludesChanged', onExcludesChanged)
   }, [pricingId])
 
+  // When auto-price completes, reload chapters from the event payload
+  useEffect(() => {
+    function onAutoPriceUpdated(e: Event) {
+      const updated = (e as CustomEvent).detail
+      if (!Array.isArray(updated)) return
+      setChapters(updated)
+      setExpandedChapters(new Set(updated.map((c: Chapter) => c.id)))
+    }
+    window.addEventListener('autoPriceUpdated', onAutoPriceUpdated)
+    return () => window.removeEventListener('autoPriceUpdated', onAutoPriceUpdated)
+  }, [])
+
   const scrollToChapter = useCallback((chapterId: string) => {
     const el = chapterRefs.current[chapterId]
     if (!el) return

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'next/navigation'
 
 interface ExcludeEntry {
@@ -8,6 +8,25 @@ interface ExcludeEntry {
   item_code: string | null
   description: string | null
   created_at: string
+}
+
+interface ChapterSummary {
+  id: string
+  name: string
+  lowCount: number
+}
+
+interface ProgressLine {
+  type: 'progress' | 'item_done' | 'done' | 'error'
+  item_code?: string
+  description?: string
+  unit_price?: number | null
+  notes?: string
+  chapter_id?: string
+  total_updated?: number
+  message?: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  results?: any[]
 }
 
 export default function PricingSettingsPage() {
@@ -23,14 +42,43 @@ export default function PricingSettingsPage() {
   const [newDesc, setNewDesc] = useState('')
   const [adding, setAdding] = useState(false)
 
+  // Auto-price state
+  const [chapters, setChapters] = useState<ChapterSummary[]>([])
+  const [selectedChapter, setSelectedChapter] = useState('all')
+  const [autoRunning, setAutoRunning] = useState(false)
+  const [log, setLog] = useState<ProgressLine[]>([])
+  const logRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => {
     fetch(`/api/pricing-projects/${pricingId}`)
       .then(r => r.json())
-      .then(d => { if (d.project) setName(d.project.name) })
+      .then(d => {
+        if (d.project) {
+          setName(d.project.name)
+          // Build chapter summaries with low-confidence item counts
+          if (Array.isArray(d.project.results)) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const summaries: ChapterSummary[] = d.project.results.map((ch: any) => ({
+              id: ch.id,
+              name: ch.name,
+              lowCount: ch.items.filter(
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (i: any) => !i.excluded && (i.matchScore ?? 100) < 52 && (!i.manualUnitPrice || i.manualUnitPrice === '')
+              ).length,
+            }))
+            setChapters(summaries)
+          }
+        }
+      })
     fetch(`/api/pricing-projects/${pricingId}/excludes`)
       .then(r => r.json())
       .then(d => setExcludes(d.excludes ?? []))
   }, [pricingId])
+
+  // Auto-scroll log
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [log])
 
   async function saveName() {
     if (!name.trim()) return
@@ -67,8 +115,55 @@ export default function PricingSettingsPage() {
     window.dispatchEvent(new Event('excludesChanged'))
   }
 
+  async function runAutoPrice() {
+    setAutoRunning(true)
+    setLog([])
+
+    const res = await fetch(`/api/pricing-projects/${pricingId}/auto-price`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chapter_id: selectedChapter }),
+    })
+
+    if (!res.body) { setAutoRunning(false); return }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const parts = buf.split('\n\n')
+      buf = parts.pop() ?? ''
+      for (const part of parts) {
+        const line = part.replace(/^data: /, '').trim()
+        if (!line) continue
+        try {
+          const ev: ProgressLine = JSON.parse(line)
+          setLog(prev => [...prev, ev])
+          if (ev.type === 'done') {
+            // Signal pricing page to reload
+            window.dispatchEvent(new CustomEvent('autoPriceUpdated', { detail: ev.results }))
+            // Update local chapter counts to reflect processed items
+            setChapters(prev => prev.map(ch => ({ ...ch, lowCount: 0 })))
+          }
+        } catch { /* ignore malformed */ }
+      }
+    }
+
+    setAutoRunning(false)
+  }
+
+  const totalLow = chapters.reduce((s, c) => {
+    if (selectedChapter === 'all') return s + c.lowCount
+    return c.id === selectedChapter ? c.lowCount : s
+  }, 0)
+
   return (
     <div className="max-w-2xl mx-auto py-10 px-4 space-y-8">
+      {/* Project Name */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
         <h2 className="text-base font-semibold text-gray-900">Project Name</h2>
         <div className="flex gap-3">
@@ -89,6 +184,86 @@ export default function PricingSettingsPage() {
         </div>
       </div>
 
+      {/* Auto-Price */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">Auto-Price Low-Confidence Items</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Uses AI (experienced construction professional, Sevilla 2024–2025 market) to estimate
+            unit prices for items with a match score below 52 that have no price yet.
+          </p>
+        </div>
+
+        <div className="flex gap-3 items-end">
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-gray-600 mb-1">Target chapter</label>
+            <select
+              value={selectedChapter}
+              onChange={e => setSelectedChapter(e.target.value)}
+              disabled={autoRunning}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+            >
+              <option value="all">All chapters ({chapters.reduce((s, c) => s + c.lowCount, 0)} qualifying items)</option>
+              {chapters.map(ch => (
+                <option key={ch.id} value={ch.id}>
+                  {ch.id} – {ch.name} ({ch.lowCount} qualifying)
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            onClick={runAutoPrice}
+            disabled={autoRunning || totalLow === 0}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+          >
+            {autoRunning ? (
+              <span className="flex items-center gap-2">
+                <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                Running…
+              </span>
+            ) : (
+              `✨ Auto-Price ${totalLow} item${totalLow !== 1 ? 's' : ''}`
+            )}
+          </button>
+        </div>
+
+        {totalLow === 0 && !autoRunning && chapters.length > 0 && (
+          <p className="text-xs text-green-600">✓ No qualifying items — all low-confidence items already have prices.</p>
+        )}
+
+        {log.length > 0 && (
+          <div
+            ref={logRef}
+            className="bg-gray-950 rounded-lg p-3 max-h-64 overflow-y-auto font-mono text-xs space-y-1"
+          >
+            {log.map((ev, i) => {
+              if (ev.type === 'progress') return (
+                <div key={i} className="text-yellow-400">
+                  ⟳ {ev.item_code} — {ev.description}
+                </div>
+              )
+              if (ev.type === 'item_done') return (
+                <div key={i} className={ev.unit_price != null ? 'text-green-400' : 'text-red-400'}>
+                  {ev.unit_price != null ? '✓' : '✗'} {ev.item_code}
+                  {ev.unit_price != null ? ` → €${ev.unit_price.toFixed(2)}` : ' → no price'}
+                  {ev.notes ? <span className="text-gray-400"> — {ev.notes}</span> : null}
+                </div>
+              )
+              if (ev.type === 'done') return (
+                <div key={i} className="text-blue-400 font-bold pt-1 border-t border-gray-800">
+                  ✅ Done — {ev.total_updated} item{ev.total_updated !== 1 ? 's' : ''} priced. Pricing tab updated.
+                </div>
+              )
+              if (ev.type === 'error') return (
+                <div key={i} className="text-red-500">⚠ Error: {ev.message}</div>
+              )
+              return null
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Exclude List */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
         <div>
           <h2 className="text-base font-semibold text-gray-900">Exclude List</h2>
