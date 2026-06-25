@@ -507,11 +507,11 @@ export default function PricingPage() {
     setExpandedChapters(new Set(grouped.map(c => c.id)))
     setStep('results')
 
-    // Persist results to DB so they reload on next visit
+    // Persist results + reference items to DB so they reload on next visit
     fetch(`/api/pricing-projects/${pricingId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ results: grouped, unpriced_file_name: unpricedFile?.name ?? null }),
+      body: JSON.stringify({ results: grouped, unpriced_file_name: unpricedFile?.name ?? null, ref_items: refItems }),
     }).catch(() => { /* non-critical */ })
   }
 

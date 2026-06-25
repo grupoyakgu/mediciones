@@ -54,6 +54,7 @@ export default function PricingProjectLayout({ children }: { children: React.Rea
   const base = `/dashboard/pricing/${pricingId}`
   const navItems = [
     { label: 'Pricing', href: base },
+    { label: 'Search', href: `${base}/search` },
     { label: 'Settings', href: `${base}/settings` },
     { label: 'Alerts', href: `${base}/alerts` },
   ]
