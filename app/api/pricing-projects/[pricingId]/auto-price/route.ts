@@ -100,7 +100,7 @@ export async function POST(
 
           for (const item of ch.items) {
             if (item.excluded) continue
-            if ((item.matchScore ?? 100) >= 52) continue
+            if ((item.matchScore ?? 100) > 50) continue
             // Already has a manual price — skip
             if (item.manualUnitPrice && item.manualUnitPrice !== '') continue
 

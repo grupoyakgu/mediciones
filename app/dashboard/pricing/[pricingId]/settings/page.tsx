@@ -48,6 +48,18 @@ export default function PricingSettingsPage() {
   const [autoRunning, setAutoRunning] = useState(false)
   const [log, setLog] = useState<ProgressLine[]>([])
   const logRef = useRef<HTMLDivElement>(null)
+  const [includeAutoPriced, setIncludeAutoPriced] = useState(true)
+
+  useEffect(() => {
+    const stored = localStorage.getItem(`autoPrice:${pricingId}`)
+    if (stored !== null) setIncludeAutoPriced(stored !== 'false')
+  }, [pricingId])
+
+  function toggleIncludeAutoPriced(val: boolean) {
+    setIncludeAutoPriced(val)
+    localStorage.setItem(`autoPrice:${pricingId}`, String(val))
+    window.dispatchEvent(new CustomEvent('autoPriceToggled', { detail: val }))
+  }
 
   useEffect(() => {
     fetch(`/api/pricing-projects/${pricingId}`)
@@ -63,7 +75,7 @@ export default function PricingSettingsPage() {
               name: ch.name,
               lowCount: ch.items.filter(
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (i: any) => !i.excluded && (i.matchScore ?? 100) < 52 && (!i.manualUnitPrice || i.manualUnitPrice === '')
+                (i: any) => !i.excluded && (i.matchScore ?? 100) <= 50 && (!i.manualUnitPrice || i.manualUnitPrice === '')
               ).length,
             }))
             setChapters(summaries)
@@ -190,9 +202,26 @@ export default function PricingSettingsPage() {
           <h2 className="text-base font-semibold text-gray-900">Auto-Price Low-Confidence Items</h2>
           <p className="text-xs text-gray-500 mt-0.5">
             Uses AI (experienced construction professional, Sevilla 2024–2025 market) to estimate
-            unit prices for items with a match score below 52 that have no price yet.
+            unit prices for items with a match score of 50 or below that have no price yet.
           </p>
         </div>
+
+        {/* Toggle: include auto-priced in total */}
+        <label className="flex items-center gap-3 cursor-pointer select-none w-fit">
+          <div className="relative">
+            <input
+              type="checkbox"
+              className="sr-only"
+              checked={includeAutoPriced}
+              onChange={e => toggleIncludeAutoPriced(e.target.checked)}
+            />
+            <div className={`w-10 h-6 rounded-full transition-colors ${includeAutoPriced ? 'bg-indigo-600' : 'bg-gray-300'}`} />
+            <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${includeAutoPriced ? 'translate-x-4' : 'translate-x-0'}`} />
+          </div>
+          <span className="text-sm text-gray-700 font-medium">
+            Show Auto-Priced Items in <span className="text-gray-900 font-semibold">Total Estimated Project Cost</span>
+          </span>
+        </label>
 
         <div className="flex gap-3 items-end">
           <div className="flex-1">

@@ -25,6 +25,7 @@ export interface MatchedItem extends RawItem {
   effectiveUnitPrice: number | null
   effectiveTotal: number | null
   excluded: boolean
+  autoPriced?: boolean
 }
 
 export interface Chapter {
