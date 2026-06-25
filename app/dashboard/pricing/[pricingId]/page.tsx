@@ -421,6 +421,11 @@ export default function PricingPage() {
 
   async function handleUnpricedFile(file: File) {
     setUnpricedFile(file)
+    fetch(`/api/pricing-projects/${pricingId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ unpriced_file_name: file.name }),
+    }).catch(() => { /* non-critical */ })
     if (file.name.toLowerCase().endsWith('.pdf')) {
       const fd = new FormData()
       fd.append('file', file)
