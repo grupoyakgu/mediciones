@@ -78,23 +78,13 @@ export default function BoqTable({ projectId }: { projectId: string }) {
     return map
   }, [items])
 
-  // Maps duplicate item_code → file line of its first occurrence
+  // Set of item codes that appear more than once
   const dupCodes = useMemo(() => {
     const counts = new Map<string, number>()
-    const firstLine = new Map<string, number>()
     for (const item of items) {
-      if (!item.item_code) continue
-      counts.set(item.item_code, (counts.get(item.item_code) ?? 0) + 1)
-      const line = item.file_line ?? 0
-      if (!firstLine.has(item.item_code) || line < firstLine.get(item.item_code)!) {
-        firstLine.set(item.item_code, line)
-      }
+      if (item.item_code) counts.set(item.item_code, (counts.get(item.item_code) ?? 0) + 1)
     }
-    const result = new Map<string, number>()
-    for (const [code, count] of Array.from(counts.entries())) {
-      if (count > 1) result.set(code, firstLine.get(code) ?? 0)
-    }
-    return result
+    return new Set(Array.from(counts.entries()).filter(([, n]) => n > 1).map(([code]) => code))
   }, [items])
 
   const chapters = useMemo(() => {
@@ -135,7 +125,7 @@ export default function BoqTable({ projectId }: { projectId: string }) {
         name: chapterMeta.get(id) ?? id,
         items: chItems.slice().sort((a, b) => (a.item_code ?? '').localeCompare(b.item_code ?? '', undefined, { numeric: true })),
         subtotal: chItems.reduce((s, i) => s + effectiveTotal(i), 0),
-        hasDup: chItems.some(i => i.item_code && dupCodes.has(i.item_code)),
+        hasDup: chItems.some(i => i.item_code && (dupCodes as Set<string>).has(i.item_code)),
 
       }))
   }, [items, search, minPrice, maxPrice, sortField, sortDir, chapterMeta])
@@ -290,12 +280,12 @@ export default function BoqTable({ projectId }: { projectId: string }) {
                             <td className="px-4 py-2 text-gray-500 font-mono">
                               <div className="flex items-center gap-1.5">
                                 {item.item_code ?? '—'}
-                                {item.item_code && dupCodes.has(item.item_code) && (
+                                {item.item_code && (dupCodes as Set<string>).has(item.item_code) && (
                                   <span
                                     className="px-1 py-0.5 text-xs font-bold bg-red-600 text-white rounded leading-none cursor-help whitespace-nowrap"
-                                    title={`First occurrence at line ${dupCodes.get(item.item_code)}`}
+                                    title={`This item appears at line ${item.file_line ?? '?'} in the BOQ file`}
                                   >
-                                    DUP {dupCodes.get(item.item_code)}
+                                    DUP {item.file_line ?? '?'}
                                   </span>
                                 )}
                               </div>
