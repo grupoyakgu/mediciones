@@ -378,7 +378,7 @@ export default function PricingPage() {
             ? effectiveUnitPrice * item.quantity : null
         return { ...item, manualUnitPrice: val, effectiveUnitPrice, effectiveTotal }
       })
-      return { ...ch, items, subtotal: items.reduce((s, i) => s + (i.effectiveTotal ?? 0), 0) }
+      return { ...ch, items, subtotal: items.filter(i => !i.excluded).reduce((s, i) => s + (i.effectiveTotal ?? 0), 0) }
     }))
   }, [])
 
