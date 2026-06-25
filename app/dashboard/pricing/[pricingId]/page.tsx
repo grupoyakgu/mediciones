@@ -123,15 +123,16 @@ function charTrigramSim(a: string, b: string): number {
   return union === 0 ? 0 : inter / union
 }
 
-// Find best fuzzy match for a token among candidates (returns 0–1)
+// Find best fuzzy match for a token among candidates (returns 0–1).
+// Requires trigram sim > 0.5 to reject weak false-positive matches
+// (e.g. "interior" ≈ "exteriores" shares trigrams but scores only 0.4 → rejected).
 function bestFuzzyMatch(tok: string, candidates: string[]): number {
   let best = 0
   for (const c of candidates) {
     if (tok === c) return 1
-    // Only attempt trigram match for tokens long enough to produce trigrams
     if (tok.length >= 4 && c.length >= 4) {
       const sim = charTrigramSim(tok, c)
-      if (sim > best) best = sim
+      if (sim > 0.5 && sim > best) best = sim
     }
   }
   return best
@@ -153,26 +154,27 @@ function buildIdf(refItems: RawItem[]): Map<string, number> {
   return idf
 }
 
-// IDF-weighted F1: measures both how much of A is covered by B (precision)
-// and how much of B covers A (recall), then combines via harmonic mean.
-// Fuzzy token matching means "instalacion" still matches "instalaciones".
+// IDF-weighted F1 with position decay.
+// Token weight = IDF × 1/(1+position) so the primary noun at position 0
+// ("Barandilla" in "Barandilla A1") dominates over type codes at later positions.
+// This prevents a single shared code token from beating a shared primary noun.
 function idfWeightedF1(tokA: string[], tokB: string[], idf: Map<string, number>): number {
   if (!tokA.length || !tokB.length) return 0
 
-  const DEFAULT_IDF = Math.log(2) // baseline for unknown tokens
+  const DEFAULT_IDF = Math.log(2)
 
   let wScoreAB = 0, wTotalA = 0
-  for (const ta of tokA) {
-    const w = idf.get(ta) ?? DEFAULT_IDF
+  for (let i = 0; i < tokA.length; i++) {
+    const w = (idf.get(tokA[i]) ?? DEFAULT_IDF) * (1 / (1 + i))
     wTotalA += w
-    wScoreAB += w * bestFuzzyMatch(ta, tokB)
+    wScoreAB += w * bestFuzzyMatch(tokA[i], tokB)
   }
 
   let wScoreBA = 0, wTotalB = 0
-  for (const tb of tokB) {
-    const w = idf.get(tb) ?? DEFAULT_IDF
+  for (let j = 0; j < tokB.length; j++) {
+    const w = (idf.get(tokB[j]) ?? DEFAULT_IDF) * (1 / (1 + j))
     wTotalB += w
-    wScoreBA += w * bestFuzzyMatch(tb, tokA)
+    wScoreBA += w * bestFuzzyMatch(tokB[j], tokA)
   }
 
   const precision = wTotalA > 0 ? wScoreAB / wTotalA : 0
@@ -212,7 +214,7 @@ function scoreItems(a: RawItem, b: RawItem, idf: Map<string, number>): number {
 
   if (!tokA.length && !tokB.length) return 0
 
-  // Primary: IDF-weighted fuzzy F1 (handles rare words, morphology, synonymy)
+  // Primary: position-weighted IDF F1
   const f1Score = idfWeightedF1(tokA, tokB, idf)
 
   // Secondary: LCS ratio — rewards same-order word runs
@@ -220,12 +222,9 @@ function scoreItems(a: RawItem, b: RawItem, idf: Map<string, number>): number {
   const lcsScore = tokA.length && tokB.length
     ? lcs / Math.max(tokA.length, tokB.length) : 0
 
-  // Tertiary: coverage — short description fully contained in longer one
-  const coverageScore = tokA.length && tokB.length
-    ? lcs / Math.min(tokA.length, tokB.length) : 0
-
-  // Description composite (order matters: F1 dominant)
-  const descScore = f1Score * 0.55 + lcsScore * 0.25 + coverageScore * 0.20
+  // Coverage removed: it inflated single-token references to 100% and
+  // caused short "Tipo A1" to outscore "Barandilla escalera tipo C1".
+  const descScore = f1Score * 0.65 + lcsScore * 0.35
 
   // Code fuzzy similarity (small tiebreaker — never overrides description)
   const codeTokA = tokens(a.item_code)
