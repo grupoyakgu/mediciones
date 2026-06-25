@@ -259,8 +259,16 @@ export default function PricingPage() {
 
   async function handleUnpricedFile(file: File) {
     setUnpricedFile(file)
-    const buf = await file.arrayBuffer()
-    setUnpricedItems(parseBoqBuffer(buf))
+    if (file.name.toLowerCase().endsWith('.pdf')) {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/boq/parse', { method: 'POST', body: fd })
+      const data = await res.json()
+      setUnpricedItems(data.items ?? [])
+    } else {
+      const buf = await file.arrayBuffer()
+      setUnpricedItems(parseBoqBuffer(buf))
+    }
   }
 
   async function proceedToSource() {
@@ -389,7 +397,7 @@ export default function PricingPage() {
       <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
         <div>
           <p className="text-sm font-medium text-gray-700 mb-2">Step 1 — Upload unpriced BOQ file</p>
-          <input ref={unpricedInputRef} type="file" accept=".xlsx,.xls" className="hidden"
+          <input ref={unpricedInputRef} type="file" accept=".xlsx,.xls,.pdf" className="hidden"
             onChange={e => { const f = e.target.files?.[0]; if (f) handleUnpricedFile(f); e.target.value = '' }} />
           {unpricedFile ? (
             <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-lg px-4 py-3">
@@ -404,7 +412,7 @@ export default function PricingPage() {
           ) : (
             <button onClick={() => unpricedInputRef.current?.click()}
               className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 hover:bg-blue-50 transition-colors">
-              <p className="text-gray-500 text-sm">Click to select an Excel BOQ file (.xlsx / .xls)</p>
+              <p className="text-gray-500 text-sm">Click to select a BOQ file (.xlsx, .xls, or .pdf)</p>
               <p className="text-gray-400 text-xs mt-1">Must follow the standard format (Column B = Capítulo / Partida)</p>
             </button>
           )}
