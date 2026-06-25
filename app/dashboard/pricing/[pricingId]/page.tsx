@@ -470,9 +470,9 @@ export default function PricingPage() {
     setStep('source')
   }
 
-  // Used by "← Change Source" from results — goes back to upload so the user
-  // can replace the unpriced BOQ file if needed, then re-select the source.
-  // Also pre-loads projects so the dropdown isn't empty when they get there.
+  // "← Change Source" from results. If we already have results (the common case),
+  // go directly to source step — which now shows both the unpriced file and reference
+  // source sections. If somehow no results yet, fall back to the upload step.
   async function goToUploadStep() {
     if (!projectsLoaded) {
       const res = await fetch('/api/projects')
@@ -480,7 +480,7 @@ export default function PricingPage() {
       setProjects(data.projects ?? [])
       setProjectsLoaded(true)
     }
-    setStep('upload')
+    setStep(chapters.length > 0 ? 'source' : 'upload')
   }
 
   async function runMatching() {
@@ -651,67 +651,96 @@ export default function PricingPage() {
 
   if (step === 'source') return (
     <div className="max-w-2xl mx-auto py-10 px-4">
-      <button onClick={() => setStep('upload')} className="text-sm text-blue-600 hover:underline mb-6 block">← Back</button>
-      <h1 className="text-2xl font-bold text-gray-900 mb-1">Project Pricing</h1>
-      <p className="text-sm text-gray-500 mb-8">
-        <strong>{unpricedItems.length} items</strong> from <em>{unpricedFile?.name}</em>. Choose a pricing reference source.
-      </p>
-      <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-6">
-        <div className="grid grid-cols-2 gap-3">
-          {(['project', 'file'] as SourceType[]).map(type => (
-            <button key={type} onClick={() => setSourceType(type)}
-              className={`p-4 rounded-lg border-2 text-left transition-colors ${sourceType === type ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
-              <p className="text-sm font-semibold text-gray-800 mb-0.5">
-                {type === 'project' ? '📁 Existing Project BOQ' : '📄 Upload Reference File'}
-              </p>
-              <p className="text-xs text-gray-500">
-                {type === 'project' ? 'Use prices from a priced BOQ already in the system' : 'Upload a priced BOQ Excel file as reference'}
-              </p>
+      <button
+        onClick={() => chapters.length > 0 ? setStep('results') : setStep('upload')}
+        className="text-sm text-blue-600 hover:underline mb-6 block"
+      >← Back</button>
+      <h1 className="text-2xl font-bold text-gray-900 mb-1">Change Source</h1>
+      <p className="text-sm text-gray-500 mb-8">Update the unpriced BOQ or the reference pricing source, then re-run matching.</p>
+
+      <div className="space-y-4">
+        {/* Unpriced BOQ file */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-3">
+          <p className="text-sm font-semibold text-gray-700">Unpriced BOQ file</p>
+          <input ref={unpricedInputRef} type="file" accept=".xlsx,.xls,.pdf" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleUnpricedFile(f); e.target.value = '' }} />
+          {unpricedFile ? (
+            <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-lg px-4 py-3">
+              <span className="text-green-600">✓</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-green-800 truncate">{unpricedFile.name}</p>
+                <p className="text-xs text-green-600">{unpricedItems.length} line items</p>
+              </div>
+              <button onClick={() => unpricedInputRef.current?.click()}
+                className="text-xs text-blue-600 hover:underline flex-shrink-0">Replace</button>
+            </div>
+          ) : (
+            <button onClick={() => unpricedInputRef.current?.click()}
+              className="w-full border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 hover:bg-blue-50 transition-colors">
+              <p className="text-gray-500 text-sm">Click to select a BOQ file (.xlsx, .xls, or .pdf)</p>
             </button>
-          ))}
+          )}
         </div>
 
-        {sourceType === 'project' && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Select project</label>
-            {projects.length === 0 ? (
-              <p className="text-sm text-gray-400 italic">No projects found.</p>
-            ) : (
-              <select value={selectedProjectId} onChange={e => setSelectedProjectId(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">— Choose a project —</option>
-                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            )}
-          </div>
-        )}
-
-        {sourceType === 'file' && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Reference BOQ file (priced)</label>
-            <input ref={refInputRef} type="file" accept=".xlsx,.xls" className="hidden"
-              onChange={e => { const f = e.target.files?.[0]; if (f) setRefFile(f); e.target.value = '' }} />
-            {refFile ? (
-              <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-lg px-4 py-3">
-                <span className="text-green-600">✓</span>
-                <span className="text-sm font-medium text-green-800 truncate flex-1">{refFile.name}</span>
-                <button onClick={() => setRefFile(null)} className="text-green-400 hover:text-green-700 text-sm">✕</button>
-              </div>
-            ) : (
-              <button onClick={() => refInputRef.current?.click()}
-                className="w-full border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 hover:bg-blue-50 transition-colors">
-                <p className="text-gray-500 text-sm">Click to select reference BOQ (.xlsx / .xls)</p>
+        {/* Reference pricing source */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+          <p className="text-sm font-semibold text-gray-700">Reference pricing source</p>
+          <div className="grid grid-cols-2 gap-3">
+            {(['project', 'file'] as SourceType[]).map(type => (
+              <button key={type} onClick={() => setSourceType(type)}
+                className={`p-4 rounded-lg border-2 text-left transition-colors ${sourceType === type ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                <p className="text-sm font-semibold text-gray-800 mb-0.5">
+                  {type === 'project' ? '📁 Existing Project BOQ' : '📄 Upload Reference File'}
+                </p>
+                <p className="text-xs text-gray-500">
+                  {type === 'project' ? 'Use prices from a priced BOQ already in the system' : 'Upload a priced BOQ Excel file as reference'}
+                </p>
               </button>
-            )}
+            ))}
           </div>
-        )}
 
-        <button
-          disabled={(sourceType === 'project' && !selectedProjectId) || (sourceType === 'file' && !refFile)}
-          onClick={runMatching}
-          className="w-full py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:bg-blue-700 transition-colors">
-          Run Pricing Match →
-        </button>
+          {sourceType === 'project' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Select project</label>
+              {projects.length === 0 ? (
+                <p className="text-sm text-gray-400 italic">No projects found.</p>
+              ) : (
+                <select value={selectedProjectId} onChange={e => setSelectedProjectId(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">— Choose a project —</option>
+                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              )}
+            </div>
+          )}
+
+          {sourceType === 'file' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Reference BOQ file (priced)</label>
+              <input ref={refInputRef} type="file" accept=".xlsx,.xls" className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) setRefFile(f); e.target.value = '' }} />
+              {refFile ? (
+                <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-lg px-4 py-3">
+                  <span className="text-green-600">✓</span>
+                  <span className="text-sm font-medium text-green-800 truncate flex-1">{refFile.name}</span>
+                  <button onClick={() => setRefFile(null)} className="text-green-400 hover:text-green-700 text-sm">✕</button>
+                </div>
+              ) : (
+                <button onClick={() => refInputRef.current?.click()}
+                  className="w-full border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 hover:bg-blue-50 transition-colors">
+                  <p className="text-gray-500 text-sm">Click to select reference BOQ (.xlsx / .xls)</p>
+                </button>
+              )}
+            </div>
+          )}
+
+          <button
+            disabled={!unpricedFile || unpricedItems.length === 0 || (sourceType === 'project' && !selectedProjectId) || (sourceType === 'file' && !refFile)}
+            onClick={runMatching}
+            className="w-full py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:bg-blue-700 transition-colors">
+            Run Pricing Match →
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -736,21 +765,7 @@ export default function PricingPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={async () => {
-              if (unpricedItems.length > 0) {
-                // Items already loaded — go directly to source selection
-                if (!projectsLoaded) {
-                  const res = await fetch('/api/projects')
-                  const data = await res.json()
-                  setProjects(data.projects ?? [])
-                  setProjectsLoaded(true)
-                }
-                setStep('source')
-              } else {
-                goToUploadStep()
-              }
-            }}
+          <button onClick={goToUploadStep}
             className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
             ← Change Source
           </button>
