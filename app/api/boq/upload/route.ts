@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import * as XLSX from 'xlsx'
+import { extractText } from 'unpdf'
 
 interface BoqRow {
   chapter_id: string
@@ -111,6 +112,51 @@ function parseCsv(text: string): BoqRow[] {
   return items
 }
 
+async function parsePdf(buffer: ArrayBuffer): Promise<BoqRow[]> {
+  const { text } = await extractText(new Uint8Array(buffer), { mergePages: true })
+  // PDF text is extracted as a single string; split into lines and parse like CSV
+  // Expected column order per line: code, nat, unit, desc, qty, unit_price, total
+  // Columns may be separated by multiple spaces or tabs
+  const lines = text.split(/\r?\n/)
+  const chapterNames = new Map<string, string>()
+  const items: BoqRow[] = []
+  let lastChapterCode = ''
+
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    // Split on 2+ spaces or tabs to handle PDF whitespace-delimited columns
+    const cols = lines[lineIdx].split(/\t|  +/).map(c => c.trim()).filter(c => c !== '')
+    if (cols.length < 2) continue
+
+    const code = cols[0] ?? ''
+    const nat  = cols[1] ?? ''
+    const unit = cols[2] ?? ''
+    const desc = cols[3] ?? ''
+
+    if (!code || !nat) continue
+
+    if (nat === 'Capítulo' || nat === 'Capitulo') {
+      chapterNames.set(code, desc)
+      if (isTopLevelChapter(code)) lastChapterCode = code
+    } else if (nat === 'Partida') {
+      const anomaly = detectAnomaly(code, lastChapterCode)
+      items.push({
+        chapter_id:        lastChapterCode,
+        chapter_name:      chapterNames.get(lastChapterCode) ?? '',
+        item_code:         code,
+        description:       desc,
+        unit,
+        quantity:          toNum(cols[4]),
+        unit_price:        toNum(cols[5]),
+        total_amount:      toNum(cols[6]),
+        numbering_anomaly: anomaly,
+        file_line:         lineIdx + 1,
+      })
+    }
+  }
+
+  return items
+}
+
 export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
@@ -134,13 +180,16 @@ export async function POST(req: NextRequest) {
     if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
       const buffer = await file.arrayBuffer()
       items = parseXlsx(buffer)
+    } else if (filename.endsWith('.pdf')) {
+      const buffer = await file.arrayBuffer()
+      items = await parsePdf(buffer)
     } else {
       const text = await file.text()
       items = parseCsv(text)
     }
 
     if (items.length === 0) {
-      return NextResponse.json({ error: 'No BOQ items found. Check that column B contains "Partida" or "Capítulo".' }, { status: 400 })
+      return NextResponse.json({ error: 'No BOQ items found. Check that the file has rows where the naturaleza column contains "Partida" or "Capítulo".' }, { status: 400 })
     }
 
     // Delete invoice_items referencing old BOQ items first (FK constraint)
