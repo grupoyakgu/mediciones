@@ -370,8 +370,10 @@ export default function PricingPage() {
   const unpricedCount = activeItems.length - pricedCount
   const overallScore = activeItems.length
     ? Math.round(activeItems.reduce((s, i) => s + i.matchScore, 0) / activeItems.length) : 0
-  const perfectMatchCount = activeItems.filter(i => i.matchScore === 100).length
+  const perfectMatchItems = activeItems.filter(i => i.matchScore === 100)
+  const perfectMatchCount = perfectMatchItems.length
   const perfectMatchPct = activeItems.length ? Math.round(perfectMatchCount / activeItems.length * 100) : 0
+  const perfectMatchTotal = perfectMatchItems.reduce((s, i) => s + (i.effectiveTotal ?? 0), 0)
   const autoPricedCount = activeItems.filter(i => i.autoPriced).length
   const autoPricedPct = activeItems.length ? Math.round(autoPricedCount / activeItems.length * 100) : 0
 
@@ -554,6 +556,7 @@ export default function PricingPage() {
         <KpiCard label="Overall Match Score" value={`${overallScore}%`}
           color={overallScore >= 81 ? 'green' : overallScore >= 51 ? 'yellow' : 'red'} />
         <KpiCard label="Perfect Matches (100%)" value={`${perfectMatchCount} (${perfectMatchPct}%)`}
+          sub={`€${fmt(perfectMatchTotal)}`}
           color={perfectMatchPct >= 50 ? 'green' : perfectMatchPct >= 20 ? 'yellow' : 'default'} />
       </div>
 
@@ -886,14 +889,15 @@ export default function PricingPage() {
   )
 }
 
-function KpiCard({ label, value, color = 'default' }: {
-  label: string; value: string; color?: 'green' | 'red' | 'yellow' | 'default'
+function KpiCard({ label, value, sub, color = 'default' }: {
+  label: string; value: string; sub?: string; color?: 'green' | 'red' | 'yellow' | 'default'
 }) {
   const textColor = { green: 'text-green-700', red: 'text-red-600', yellow: 'text-yellow-600', default: 'text-gray-900' }[color]
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5">
       <p className="text-xs text-gray-400 font-medium uppercase tracking-wider mb-2">{label}</p>
       <p className={`text-xl font-bold ${textColor}`}>{value}</p>
+      {sub && <p className="text-xs text-gray-500 mt-1">{sub}</p>}
     </div>
   )
 }
