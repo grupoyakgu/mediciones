@@ -312,6 +312,8 @@ export default function PricingPage() {
     ? Math.round(activeItems.reduce((s, i) => s + i.matchScore, 0) / activeItems.length) : 0
   const perfectMatchCount = activeItems.filter(i => i.matchScore === 100).length
   const perfectMatchPct = activeItems.length ? Math.round(perfectMatchCount / activeItems.length * 100) : 0
+  const autoPricedCount = activeItems.filter(i => i.autoPriced).length
+  const autoPricedPct = activeItems.length ? Math.round(autoPricedCount / activeItems.length * 100) : 0
 
   const matchDist = (
     [['High', '#16a34a'], ['Medium', '#ca8a04'], ['Low', '#dc2626']] as [MatchLabel, string][]
@@ -493,6 +495,8 @@ export default function PricingPage() {
           color={overallScore >= 81 ? 'green' : overallScore >= 51 ? 'yellow' : 'red'} />
         <KpiCard label="Perfect Matches (100%)" value={`${perfectMatchCount} (${perfectMatchPct}%)`}
           color={perfectMatchPct >= 50 ? 'green' : perfectMatchPct >= 20 ? 'yellow' : 'default'} />
+        <KpiCard label="Auto-Priced Items" value={`${autoPricedCount} (${autoPricedPct}%)`}
+          color={autoPricedCount > 0 ? 'yellow' : 'default'} />
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 p-5">
