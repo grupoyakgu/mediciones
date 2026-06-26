@@ -165,8 +165,23 @@ export default function PricingSettingsPage() {
           if (ev.type === 'done') {
             // Signal pricing page to reload
             window.dispatchEvent(new CustomEvent('autoPriceUpdated', { detail: ev.results }))
-            // Update local chapter counts to reflect processed items
-            setChapters(prev => prev.map(ch => ({ ...ch, lowCount: 0 })))
+            // Re-fetch project to get accurate remaining qualifying counts per chapter
+            fetch(`/api/pricing-projects/${pricingId}`)
+              .then(r => r.json())
+              .then(d => {
+                if (Array.isArray(d.project?.results)) {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  setChapters(d.project.results.map((ch: any) => ({
+                    id: ch.id,
+                    name: ch.name,
+                    lowCount: ch.items.filter(
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      (i: any) => !i.excluded && (i.matchScore ?? 100) <= 50 && (!i.manualUnitPrice || i.manualUnitPrice === '')
+                    ).length,
+                  })))
+                }
+              })
+              .catch(() => { /* non-critical */ })
           }
         } catch { /* ignore malformed */ }
       }
