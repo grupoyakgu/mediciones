@@ -289,14 +289,7 @@ export default function SearchPage() {
       }
     })
 
-    // Log top5 for every item so user can copy from console
-    results.forEach(r => {
-      console.log(`[BOQ MATCH] "${r.unpriced.item_code}" / "${r.unpriced.description}"`)
-      console.log(`  winner → "${r.best?.item_code}" / "${r.best?.description}" score=${r.score}`)
-      r.top5.forEach((c, i) => console.log(`  #${i + 1} score=${c.score}  "${c.item.item_code}" "${c.item.description}"`))
-    })
-
-    setBoqResults(results)
+setBoqResults(results)
     setDebugLog(log)
     setRunning(false)
   }
