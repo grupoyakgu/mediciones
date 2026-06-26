@@ -167,10 +167,20 @@ function lcsLength(a: string[], b: string[]): number {
   return prev[b.length]
 }
 
+// Strip a leading alphanumeric prefix of up to 4 chars followed by a separator
+// e.g. "C04 - Pie de ladrillo" → "pie de ladrillo"
+function stripLeadingCode(s: string): string {
+  return s.replace(/^[a-z0-9]{1,4}[\s\-–—]+/, '').trim()
+}
+
 export function scoreItems(a: RawItem, b: RawItem, idf: Map<string, number>): number {
   const normDescA = normalize(a.description)
   const normDescB = normalize(b.description)
   if (normDescA && normDescA === normDescB) return 100
+  // Perfect match when descriptions differ only by a leading alphanumeric code
+  const strippedA = stripLeadingCode(normDescA)
+  const strippedB = stripLeadingCode(normDescB)
+  if (strippedA && strippedA === strippedB && strippedA !== normDescA && strippedB !== normDescB) return 100
   const tokA = tokens(a.description)
   const tokB = tokens(b.description)
   if (!tokA.length && !tokB.length) return 0
