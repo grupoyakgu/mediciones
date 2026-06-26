@@ -495,13 +495,20 @@ export default function PricingPage() {
           color={overallScore >= 81 ? 'green' : overallScore >= 51 ? 'yellow' : 'red'} />
         <KpiCard label="Perfect Matches (100%)" value={`${perfectMatchCount} (${perfectMatchPct}%)`}
           color={perfectMatchPct >= 50 ? 'green' : perfectMatchPct >= 20 ? 'yellow' : 'default'} />
-        <KpiCard label="Auto-Priced Items" value={`${autoPricedCount} (${autoPricedPct}%)`}
-          color={autoPricedCount > 0 ? 'yellow' : 'default'} />
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Total Estimated Project Cost</p>
-        <p className="text-3xl font-bold text-gray-900">€{fmt(totalCost)}</p>
+      <div className="flex gap-4">
+        <div className="flex-1 bg-white rounded-xl border border-gray-200 p-5">
+          <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Total Estimated Project Cost</p>
+          <p className="text-3xl font-bold text-gray-900">€{fmt(totalCost)}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-200 p-5 min-w-[160px]">
+          <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Auto-Priced Items</p>
+          <p className={`text-3xl font-bold ${autoPricedCount > 0 ? 'text-yellow-600' : 'text-gray-900'}`}>
+            {autoPricedCount}
+          </p>
+          <p className="text-xs text-gray-400 mt-0.5">{autoPricedPct}% of active items</p>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
