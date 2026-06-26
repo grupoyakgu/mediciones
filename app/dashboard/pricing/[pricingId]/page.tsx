@@ -83,6 +83,7 @@ export default function PricingPage() {
   const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set())
   const [excludes, setExcludes] = useState<ExcludeEntry[]>([])
   const [includeAutoPriced, setIncludeAutoPriced] = useState(true)
+  const [autoPricingChapter, setAutoPricingChapter] = useState<string | null>(null)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
@@ -183,6 +184,44 @@ export default function PricingPage() {
     await fetch(`/api/pricing-projects/${pricingId}/excludes?id=${exclude.id}`, { method: 'DELETE' })
     setExcludes(prev => prev.filter(e => e.id !== exclude.id))
     window.dispatchEvent(new Event('excludesChanged'))
+  }
+
+  async function runAutoPriceForChapter(chapterId: string) {
+    setAutoPricingChapter(chapterId)
+
+    const res = await fetch(`/api/pricing-projects/${pricingId}/auto-price`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chapter_id: chapterId }),
+    })
+
+    if (!res.body) { setAutoPricingChapter(null); return }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const parts = buf.split('\n\n')
+      buf = parts.pop() ?? ''
+      for (const part of parts) {
+        const line = part.replace(/^data: /, '').trim()
+        if (!line) continue
+        try {
+          const ev = JSON.parse(line)
+          if (ev.type === 'done' && Array.isArray(ev.results)) {
+            setChapters(ev.results)
+            setExpandedChapters(prev => { const s = new Set(prev); s.add(chapterId); return s })
+            window.dispatchEvent(new CustomEvent('autoPriceUpdated', { detail: ev.results }))
+          }
+        } catch { /* ignore malformed */ }
+      }
+    }
+
+    setAutoPricingChapter(null)
   }
 
   const scrollToChapter = useCallback((chapterId: string) => {
@@ -651,17 +690,22 @@ export default function PricingPage() {
           const scoreColor = ch.avgMatchScore >= 81 ? '#16a34a' : ch.avgMatchScore >= 51 ? '#ca8a04' : '#dc2626'
           const displayItems = isFiltering ? filteredItems : ch.items
 
+          const qualifyingCount = ch.items.filter(
+            i => !i.excluded && (i.matchScore ?? 100) <= 50 && (!i.manualUnitPrice || i.manualUnitPrice === '')
+          ).length
+          const isAutoPricingThis = autoPricingChapter === ch.id
+
           return (
             <div
               key={ch.id}
               ref={el => { chapterRefs.current[ch.id] = el }}
               className="bg-white rounded-xl border border-gray-200 overflow-hidden scroll-mt-4"
             >
-              <button
-                className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors text-left"
-                onClick={() => toggleChapter(ch.id)}
-              >
-                <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors">
+                <button
+                  className="flex items-center gap-3 min-w-0 flex-1 text-left"
+                  onClick={() => toggleChapter(ch.id)}
+                >
                   <span className="text-gray-400 text-sm w-4">{isOpen ? '▾' : '▸'}</span>
                   <span className="font-semibold text-gray-900 text-sm">{ch.id} – {ch.name}</span>
                   <span className="text-xs px-2 py-0.5 rounded-full font-medium"
@@ -683,12 +727,28 @@ export default function PricingPage() {
                   {isFiltering && (
                     <span className="text-xs text-gray-400">({filteredItems.length} shown)</span>
                   )}
-                </div>
-                <div className="flex items-center gap-6 flex-shrink-0 ml-4">
+                </button>
+                <div className="flex items-center gap-4 flex-shrink-0 ml-4">
+                  {qualifyingCount > 0 && (
+                    <button
+                      onClick={() => runAutoPriceForChapter(ch.id)}
+                      disabled={autoPricingChapter !== null}
+                      className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                    >
+                      {isAutoPricingThis ? (
+                        <>
+                          <span className="w-3 h-3 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                          Pricing…
+                        </>
+                      ) : (
+                        <>✨ Auto-Price {qualifyingCount}</>
+                      )}
+                    </button>
+                  )}
                   <span className="text-xs text-gray-400">{pctOfTotal.toFixed(1)}% of total</span>
                   <span className="font-semibold text-gray-900 text-sm">€{fmt(ch.subtotal)}</span>
                 </div>
-              </button>
+              </div>
 
               {isOpen && (
                 <div className="border-t border-gray-100 overflow-x-auto">
