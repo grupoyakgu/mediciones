@@ -164,7 +164,7 @@ export default function PricingPage() {
     return () => window.removeEventListener('autoPriceToggled', onAutoPriceToggled)
   }, [])
 
-  async function addToExcludeList(item_code: string, description: string) {
+  async function addToExcludeList(item_code: string) {
     const res = await fetch(`/api/pricing-projects/${pricingId}/excludes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -788,7 +788,7 @@ export default function PricingPage() {
                                 </button>
                               ) : (
                                 <button
-                                  onClick={() => addToExcludeList(item.item_code, item.description)}
+                                  onClick={() => addToExcludeList(item.item_code)}
                                   title="Add to exclude list"
                                   className="text-gray-300 hover:text-red-500 transition-colors"
                                 >
