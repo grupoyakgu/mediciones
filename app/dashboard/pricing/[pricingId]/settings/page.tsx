@@ -47,8 +47,6 @@ export default function PricingSettingsPage() {
   const [selectedChapter, setSelectedChapter] = useState('all')
   const [autoRunning, setAutoRunning] = useState(false)
   const [log, setLog] = useState<ProgressLine[]>([])
-  const [progressDone, setProgressDone] = useState(0)
-  const [progressTotal, setProgressTotal] = useState(0)
   const logRef = useRef<HTMLDivElement>(null)
   const [includeAutoPriced, setIncludeAutoPriced] = useState(true)
 
@@ -132,8 +130,6 @@ export default function PricingSettingsPage() {
   async function runAutoPrice() {
     setAutoRunning(true)
     setLog([])
-    setProgressDone(0)
-    setProgressTotal(totalLow)
 
     const res = await fetch(`/api/pricing-projects/${pricingId}/auto-price`, {
       method: 'POST',
@@ -159,9 +155,6 @@ export default function PricingSettingsPage() {
         try {
           const ev: ProgressLine = JSON.parse(line)
           setLog(prev => [...prev, ev])
-          if (ev.type === 'item_done') {
-            setProgressDone(prev => prev + 1)
-          }
           if (ev.type === 'done') {
             // Signal pricing page to reload
             window.dispatchEvent(new CustomEvent('autoPriceUpdated', { detail: ev.results }))
@@ -282,23 +275,6 @@ export default function PricingSettingsPage() {
           <p className="text-xs text-green-600">✓ No qualifying items — all low-confidence items already have prices.</p>
         )}
 
-        {(autoRunning || (progressTotal > 0 && progressDone === progressTotal)) && (
-          <div className="space-y-1.5">
-            <div className="flex justify-between text-xs text-gray-500">
-              <span>{autoRunning ? 'Pricing items…' : 'Complete'}</span>
-              <span>{progressDone} / {progressTotal}</span>
-            </div>
-            <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-300 ${progressDone === progressTotal && !autoRunning ? 'bg-green-500' : 'bg-indigo-500'}`}
-                style={{ width: `${progressTotal > 0 ? Math.round((progressDone / progressTotal) * 100) : 0}%` }}
-              />
-            </div>
-            <p className="text-[10px] text-gray-400 text-right">
-              {progressTotal > 0 ? Math.round((progressDone / progressTotal) * 100) : 0}%
-            </p>
-          </div>
-        )}
 
         {log.length > 0 && (
           <div
