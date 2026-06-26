@@ -689,6 +689,11 @@ export default function PricingPage() {
                                 {item.excluded && (
                                   <span className="flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-600 tracking-wide mt-0.5">EXC</span>
                                 )}
+                                {!item.excluded && item.autoPriced && (
+                                  <span className={`flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded tracking-wide mt-0.5 ${
+                                    includeAutoPriced ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'
+                                  }`}>AUTO</span>
+                                )}
                                 <div>
                                   <div className={`truncate ${item.excluded ? 'line-through text-gray-400' : 'text-gray-800'}`} title={item.description}>
                                     {item.description}
@@ -731,13 +736,6 @@ export default function PricingPage() {
                                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">EXC</span>
                               ) : (
                                 <div className="flex flex-col items-center gap-0.5">
-                                  {item.autoPriced && (
-                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                                      includeAutoPriced
-                                        ? 'bg-green-100 text-green-700'
-                                        : 'bg-red-100 text-red-600'
-                                    }`}>AUTO</span>
-                                  )}
                                   <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
                                     style={{ background: `${labelColor}1a`, color: labelColor }}>
                                     {item.matchScore}%

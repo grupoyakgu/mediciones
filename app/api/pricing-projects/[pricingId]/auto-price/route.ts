@@ -118,6 +118,7 @@ export async function POST(
               item.effectiveUnitPrice = unit_price
               item.effectiveTotal =
                 item.quantity != null ? unit_price * item.quantity : null
+              item.autoPriced = true
               totalUpdated++
             }
 
