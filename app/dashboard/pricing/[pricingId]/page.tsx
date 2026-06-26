@@ -164,6 +164,27 @@ export default function PricingPage() {
     return () => window.removeEventListener('autoPriceToggled', onAutoPriceToggled)
   }, [])
 
+  async function addToExcludeList(item_code: string, description: string) {
+    const res = await fetch(`/api/pricing-projects/${pricingId}/excludes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_code, description: null }),
+    })
+    const data = await res.json()
+    if (data.exclude) {
+      setExcludes(prev => [...prev, data.exclude])
+      window.dispatchEvent(new Event('excludesChanged'))
+    }
+  }
+
+  async function removeFromExcludeList(item_code: string) {
+    const exclude = excludes.find(e => e.item_code === item_code)
+    if (!exclude) return
+    await fetch(`/api/pricing-projects/${pricingId}/excludes?id=${exclude.id}`, { method: 'DELETE' })
+    setExcludes(prev => prev.filter(e => e.id !== exclude.id))
+    window.dispatchEvent(new Event('excludesChanged'))
+  }
+
   const scrollToChapter = useCallback((chapterId: string) => {
     const el = chapterRefs.current[chapterId]
     if (!el) return
@@ -681,6 +702,7 @@ export default function PricingPage() {
                         <th className="px-4 py-2 text-right font-medium text-gray-500 w-28">Unit Price</th>
                         <th className="px-4 py-2 text-right font-medium text-gray-500 w-28">Total</th>
                         <th className="px-4 py-2 text-center font-medium text-gray-500 w-28">Match</th>
+                        <th className="px-4 py-2 w-10"></th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
@@ -755,13 +777,34 @@ export default function PricingPage() {
                                 </div>
                               )}
                             </td>
+                            <td className="px-2 py-2 text-center">
+                              {item.excluded ? (
+                                <button
+                                  onClick={() => removeFromExcludeList(item.item_code)}
+                                  title="Remove from exclude list"
+                                  className="text-gray-400 hover:text-green-600 transition-colors text-xs font-medium"
+                                >
+                                  ↩
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => addToExcludeList(item.item_code, item.description)}
+                                  title="Add to exclude list"
+                                  className="text-gray-300 hover:text-red-500 transition-colors"
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                                  </svg>
+                                </button>
+                              )}
+                            </td>
                           </tr>
                         )
                       })}
                     </tbody>
                     <tfoot>
                       <tr className="bg-gray-50 border-t border-gray-200">
-                        <td colSpan={5} className="px-4 py-2 text-right text-xs font-semibold text-gray-700">
+                        <td colSpan={6} className="px-4 py-2 text-right text-xs font-semibold text-gray-700">
                           Chapter Subtotal
                         </td>
                         <td className="px-4 py-2 text-right text-xs font-bold text-gray-900">
